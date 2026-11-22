@@ -3755,10 +3755,11 @@ export default function App() {
 										{rightPanel === "status" && (
 											<button
 												type="button"
-												className="icon-btn"
+												className="icon-btn status-refresh-btn"
 												disabled={stateRefreshing}
+												aria-busy={stateRefreshing}
 												onClick={() => void refreshWorldState()}
-												title={t("刷新状态")}
+												title={stateRefreshing ? t("正在刷新…") : t("刷新状态")}
 												aria-label={t("刷新状态")}
 											>
 												<IconRefresh size={15} />

@@ -1599,6 +1599,15 @@ html[data-theme="dark"] [data-tip]:focus-visible::after {
 	min-width: 0;
 }
 
+.status-refresh-btn[aria-busy="true"] {
+	color: var(--accent);
+	cursor: wait;
+}
+
+.status-refresh-btn[aria-busy="true"] svg {
+	animation: spin 0.9s linear infinite;
+}
+
 .stage-col-title {
 	display: inline-flex;
 	align-items: center;
@@ -4510,6 +4519,7 @@ input.panel-search.num {
 
 /* ── 动效纪律 ── */
 @media (prefers-reduced-motion: reduce) {
+	.status-refresh-btn[aria-busy="true"] svg,
 	.pulse,
 	.dot-connecting,
 	.caret {
