@@ -43,6 +43,12 @@ test("场记输出解析：只取 patch，丢弃审查字段", () => {
 	assert.deepEqual(malformed.warnings, []);
 });
 
+test("场记输出解析：未闭合的前置花括号不会遮蔽后续 JSON", () => {
+	const parsed = parseScribeResult('旧格式示例 { 尚未结束；实际结果：{"patch":{"time":"黄昏"}}');
+	assert.equal(parsed?.patch.time, "黄昏");
+	assert.equal(parseScribeResult("坏前缀 { 仍未结束"), null, "没有完整 JSON 时仍拒绝解析");
+});
+
 test("场记输出解析：unasked_turn 即使返回也丢弃", () => {
 	const hit = parseScribeResult('{"patch":{},"warnings":[],"unasked_turn":"未经询问即让盟友背叛"}');
 	assert.ok(hit);

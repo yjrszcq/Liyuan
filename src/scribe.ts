@@ -166,7 +166,10 @@ export function parseScribeResult(text: string): ScribeResult | null {
 				}
 			}
 		}
-		if (end === -1) break;
+		if (end === -1) {
+			idx = start + 1;
+			continue;
+		}
 		try {
 			const obj = JSON.parse(t.slice(start, end + 1)) as Record<string, unknown>;
 			if (obj && typeof obj === "object" && !Array.isArray(obj)) {
