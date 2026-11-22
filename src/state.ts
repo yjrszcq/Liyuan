@@ -129,7 +129,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 							warnings.push(`characters.${name} 需要对象或 null，已忽略`);
 							continue;
 						}
-						const cur: CharacterState = next.characters[name] ?? { affinity: 0, status: "", notes: "" };
+						const cur: CharacterState = Object.hasOwn(next.characters, name) ? next.characters[name]! : { affinity: 0, status: "", notes: "" };
 						const p = cs as Partial<Record<keyof CharacterState, unknown>>;
 						if (typeof p.affinity === "number") cur.affinity = clamp(Math.round(p.affinity), -100, 100);
 						if (typeof p.status === "string") cur.status = p.status;

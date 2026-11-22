@@ -6626,6 +6626,33 @@ input.panel-search.num {
 	font-size: 12px;
 	color: var(--text);
 }
+.sp-repair-label, .sp-repair-note { font-size: 12px; color: var(--text-soft); }
+.sp-repair-section textarea {
+	width: 100%;
+	min-height: 76px;
+	resize: vertical;
+	padding: 8px 10px;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	font: inherit;
+}
+.sp-repair-result {
+	padding: 10px;
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--surface) 88%, var(--accent-wash));
+	font-size: 12px;
+	line-height: 1.5;
+}
+.sp-repair-result p { margin: 6px 0; }
+.sp-repair-result ul { margin: 8px 0; padding-left: 18px; overflow-wrap: anywhere; }
+.sp-repair-result del { color: var(--text-faint); }
+.sp-repair-result ins { color: var(--text); }
+.sp-repair-evidence { color: var(--text-soft); }
+.sp-repair-evidence li { margin: 4px 0; }
+.sp-repair-evidence span { color: var(--text-faint); margin-right: 5px; }
 .sp-section {
 	display: flex;
 	flex-direction: column;

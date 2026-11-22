@@ -180,4 +180,7 @@ export const server: Record<string, string> = {
 	"未找到性格模板「{key}」": "Personality template “{key}” not found",
 	"已删除性格模板「{name}」": "Deleted personality template “{name}”",
 	"已切换助手性格为「{name}」": "Switched assistant personality to “{name}”",
+	"缺少纠错说明": "Repair instruction is required",
+	"修复提案已失效": "This repair proposal has expired",
+	"缺少撤销凭据": "Missing undo token",
 };

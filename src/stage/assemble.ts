@@ -268,18 +268,28 @@ export function rebuildHistory(
 	return { history, lastUserText, lastNarrativeText, ...(active ? { summary: active.summary } : {}) };
 }
 
-/** World state = f(branch): newest legacy snapshot or scribe checkpoint. */
-export function stateFromBranch(branch: BranchEntryLike[]): WorldState {
-	branch = storyBranch(branch);
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const e = branch[i];
-		if (e.type !== "custom" || e.customType !== "rp-state" || !e.data || typeof e.data !== "object") continue;
-		const { __scribeBeatId: _checkpoint, ...state } = e.data as Record<string, unknown>;
-		return { ...defaultState(), ...(state as Partial<WorldState>) };
+/** Newest ledger snapshot visible to the story, not to legacy authoring. */
+export function stateSnapshotFromBranch(branch: BranchEntryLike[]): BranchEntryLike | undefined {
+	const visible = storyBranch(branch);
+	for (let i = visible.length - 1; i >= 0; i--) {
+		const entry = visible[i]!;
+		if (entry.type === "custom" && entry.customType === "rp-state" && entry.data && typeof entry.data === "object") return entry;
 	}
-	return defaultState();
+	return undefined;
 }
 
+/** Whether any session entry stores a ledger, including snapshots on abandoned branches. */
+export function hasStateSnapshot(entries: BranchEntryLike[]): boolean {
+	return entries.some((entry) => entry.type === "custom" && entry.customType === "rp-state");
+}
+
+/** World state = f(branch): newest snapshot or the supplied legacy fallback. */
+export function stateFromBranch(branch: BranchEntryLike[], fallback = defaultState): WorldState {
+	const snapshot = stateSnapshotFromBranch(branch);
+	if (!snapshot) return fallback();
+	const { __scribeBeatId: _checkpoint, __stateRepair: _audit, ...state } = snapshot.data as Record<string, unknown>;
+	return { ...defaultState(), ...(state as Partial<WorldState>) };
+}
 // ---------------- system prompt（字节稳定） ----------------
 
 interface StageSystemOptions {

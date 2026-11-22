@@ -318,7 +318,11 @@ export interface RestHost {
 	deleteCardSessions(cardRel: string): Promise<number>;
 	readSessionFile(path: string): Promise<string>;
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
-	/** 世界状态用户主权编辑（applyPatch 语义，落盘+ await statesync） */
+	/** 由当前分支上下文提出、确认、撤销状态修复。 */
+	proposeStateRepair(instruction: string): Promise<unknown>;
+	applyStateRepair(token: string): unknown;
+	stateRepairStatus(): unknown;
+	undoStateRepair(token: string): unknown;
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
 	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
 	retryPendingScribes(): Promise<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }>;
@@ -3419,6 +3423,31 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				if (!body.patch || typeof body.patch !== "object") throw new Error(t("缺少 patch"));
 				const r = await host.applyStatePatch(body.patch);
 				sendJson(res, 200, r);
+				return true;
+			}
+			case "POST /api/state/repair": {
+				if (refuseWhileStreaming()) return true;
+				const body = JSON.parse(await readBody(req)) as { instruction?: unknown };
+				if (typeof body.instruction !== "string") throw new Error(t("缺少纠错说明"));
+				sendJson(res, 200, await host.proposeStateRepair(body.instruction));
+				return true;
+			}
+			case "POST /api/state/repair/apply": {
+				if (refuseWhileStreaming()) return true;
+				const body = JSON.parse(await readBody(req)) as { token?: unknown };
+				if (typeof body.token !== "string") throw new Error(t("修复提案已失效"));
+				sendJson(res, 200, host.applyStateRepair(body.token));
+				return true;
+			}
+			case "GET /api/state/repair/status": {
+				sendJson(res, 200, host.stateRepairStatus());
+				return true;
+			}
+			case "POST /api/state/repair/undo": {
+				if (refuseWhileStreaming()) return true;
+				const body = JSON.parse(await readBody(req)) as { token?: unknown };
+				if (typeof body.token !== "string" || !body.token) throw new Error(t("缺少撤销凭据"));
+				sendJson(res, 200, host.undoStateRepair(body.token));
 				return true;
 			}
 			case "POST /api/state/refresh": {

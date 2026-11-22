@@ -63,7 +63,7 @@ import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
 import { createBtwRunner, type BtwRunner } from "./btw.ts";
 import { DEFAULT_BTW_PERSONA, resolveBtwPersonaTemplates } from "../src/stage/btw.ts";
 import { ScreenshotHub } from "./screenshot.ts";
-import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
+import { hasStateSnapshot, stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
 	activePanels,
 	closePanel as closePanelInMap,
@@ -82,7 +82,7 @@ import {
 } from "../src/paths.ts";
 import { seedBashDenylist } from "../src/bash-denylist.ts";
 import { seedRelayRules } from "../src/relay-rules.ts";
-import { applyPatch, loadState, saveState } from "../src/state.ts";
+import { applyPatch, defaultState, loadState, saveState } from "../src/state.ts";
 import { DEFAULT_CONFIG, type RpConfig, type WorldState } from "../src/types.ts";
 import {
 	loadTtsConfig,
@@ -173,7 +173,7 @@ import {
 	mountedLorebookPaths,
 	toggleDisabledLore,
 } from "../src/lorebook.ts";
-import { syncStoryPanelsFromDisk, syncStoryStateFromDisk } from "../src/story-sync.ts";
+import { syncStoryPanelsFromDisk, syncStoryState } from "../src/story-sync.ts";
 import { applyPendingBackupRestore, BACKUP_ROOT, buildBackupZip, projectSessionDir } from "../src/backup.ts";
 import { assetVault, SNAPSHOT_INTERVAL_MS } from "../src/asset-vault.ts";
 import { fileChangeOf, toolStartDetail } from "../src/activity-format.ts";
@@ -698,18 +698,18 @@ const cardScriptsForMvu = (): Array<{ content?: string }> => {
 		return [];
 	}
 };
-const currentState = (): WorldState => {
-	const raw = ((): WorldState => {
-		try {
-			const branch = session.sessionManager.getBranch() as BranchEntryLike[];
-			if (branch.some((e) => e.type === "custom" && e.customType === "rp-state")) {
-				return stateFromBranch(branch);
-			}
-		} catch {
-			// 树不可读（极早期生命周期）→ 磁盘缓存
-		}
+const currentRawState = (): WorldState => {
+	try {
+		const sm = session.sessionManager;
+		const entries = sm.getEntries() as BranchEntryLike[];
+		return stateFromBranch(sm.getBranch() as BranchEntryLike[], () => hasStateSnapshot(entries) ? defaultState() : loadState(stateFileOf()));
+	} catch {
+		// 树不可读（极早期生命周期）→ 磁盘缓存
 		return loadState(stateFileOf());
-	})();
+	}
+};
+const currentState = (): WorldState => {
+	const raw = currentRawState();
 	return seedMvuIfNeeded(raw, cardBookForMvu(), names.userName, names.charName, cardScriptsForMvu()) as WorldState;
 };
 
@@ -1821,6 +1821,24 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 const restHost: RestHost = {
 	cwd,
 	isStreaming: () => session.isStreaming || stage.isStreaming,
+	proposeStateRepair: (instruction) => stage.proposeStateRepair(instruction),
+	applyStateRepair: (token) => {
+		const result = stage.applyStateRepair(token);
+		if (result.ok && result.state) {
+			syncStoryState(result.state);
+			broadcast({ type: "state", state: currentState() });
+		}
+		return result;
+	},
+	stateRepairStatus: () => stage.stateRepairStatus(),
+	undoStateRepair: (token) => {
+		const result = stage.undoStateRepair(token);
+		if (result.ok && result.state) {
+			syncStoryState(result.state);
+			broadcast({ type: "state", state: currentState() });
+		}
+		return result;
+	},
 	refreshState: (requestId) => stage.refreshState(requestId ? (stageName) => broadcast({ type: "state_refresh", requestId, stage: stageName }) : undefined),
 	retryPendingScribes: () => stage.retryPendingScribes(),
 	settleCardPreview: (report) => cardPreviews.settle(report),
@@ -2059,12 +2077,17 @@ const restHost: RestHost = {
 		const saved = r.panels[name];
 		return { name: saved.name, kind: saved.kind, updatedAt: saved.updatedAt };
 	},
-	// ---- 世界状态编辑（PLAN-PANELS §2.11）：用户主权 applyPatch，落盘即广播，命令桥收编进树 ----
+	// ---- 世界状态编辑（PLAN-PANELS §2.11）：用户主权 applyPatch，以当前可见分支为基准 ----
 	async applyStatePatch(patch) {
 		const file = stateFileOf();
-		const r = applyPatch(loadState(file), patch);
+		const before = currentRawState();
+		const r = applyPatch(before, patch);
 		saveState(file, r.state); // fs.watch 自动广播 state 帧
-		syncStoryStateFromDisk();
+		if (JSON.stringify(before) !== JSON.stringify(r.state)) {
+			session.sessionManager.appendCustomEntry("rp-state", r.state);
+			session.sessionManager.flush();
+		}
+		syncStoryState(currentRawState());
 		return { applied: r.applied, warnings: r.warnings };
 	},
 	// ---- agent 模式：稿子（正文/ 文件）与快照仓 ----

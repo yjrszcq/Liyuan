@@ -1054,11 +1054,19 @@ export class SessionManager {
 		}
 	}
 
-	private _appendEntry(entry: SessionEntry): void {
+	private _appendEntry(entry: SessionEntry, forceFlush = false): void {
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		try {
+			this._persist(entry);
+			if (forceFlush) this.flush();
+		} catch (error) {
+			this.fileEntries.pop();
+			this.byId.delete(entry.id);
+			this.leafId = entry.parentId;
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1142,6 +1150,20 @@ export class SessionManager {
 			timestamp: new Date().toISOString(),
 		};
 		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/** Append and force persistence as one in-memory commit; roll back indexes if either write fails. */
+	appendCustomEntryAndFlush(customType: string, data?: unknown): string {
+		const entry: CustomEntry = {
+			type: "custom",
+			customType,
+			data,
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+		};
+		this._appendEntry(entry, true);
 		return entry.id;
 	}
 

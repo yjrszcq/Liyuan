@@ -569,6 +569,7 @@ export default function App() {
 	 */
 	const turnSegsRef = useRef<TurnSegment[]>([]);
 	const sessionIdRef = useRef("");
+	const [statusBranchVersion, setStatusBranchVersion] = useState(0);
 	/** 用户已按停止：忽略迟到 delta，避免 UI 解锁后还在刷字 */
 	const abortingRef = useRef(false);
 	const rightPanelRef = useRef<PanelId | AgentPanelId | null>(initialPanels.right);
@@ -1138,6 +1139,7 @@ export default function App() {
 		(frame: ServerFrame) => {
 			switch (frame.type) {
 				case "hello": {
+					setStatusBranchVersion((version) => version + 1);
 					syncLocaleFromConfig(frame.uiLanguage);
 					modeRef.current = frame.conversationMode ?? "roleplay";
 					setConversationMode(modeRef.current);
@@ -2342,7 +2344,7 @@ export default function App() {
 			case "roster":
 				return <RosterPanel state={worldState} toast={pushToast} />;
 			case "status":
-				return <StatusPanel state={worldState} toast={pushToast} pendingScribeCount={pendingScribeCount} retryingScribes={retryingScribes} onRetryPendingScribes={() => void retryPendingScribes()} />;
+				return <StatusPanel key={statusBranchVersion} state={worldState} toast={pushToast} pendingScribeCount={pendingScribeCount} retryingScribes={retryingScribes} onRetryPendingScribes={() => void retryPendingScribes()} />;
 			case "uploads":
 				return (
 					<UploadsPanel

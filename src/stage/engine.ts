@@ -5,6 +5,7 @@
  * 本层保留 RP 的拍级队列、稿纸、合并、媒体与旁路工作，不再自持模型循环。
  */
 
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isRetryableAssistantError } from "@liyuan/ai/compat";
 
@@ -35,7 +36,8 @@ import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionD
 import { changeChatMemory, listChatMemory, readChatMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
 import { applySkinKeepingBody } from "../cardSkin.ts";
 import { classifyTag, cleanAssistantText, scanTaggedBlocks } from "../postprocess.ts";
-import { formatRosterIndex, formatState, saveState } from "../state.ts";
+import { buildStateRepairPrompt, parseStateRepairResult, STATE_REPAIR_INSTRUCTION_MAX, STATE_REPAIR_STORY_MAX, type ParsedStateRepair, type StateRepairChange, type StateRepairParseResult } from "../state-repair.ts";
+import { defaultState, formatRosterIndex, formatState, loadState, saveState } from "../state.ts";
 import type { LorebookEntry, WorldState } from "../types.ts";
 import {
 	applyHistoryInjections,
@@ -45,6 +47,8 @@ import {
 	rebuildHistory,
 	completedStoryBeats,
 	stateFromBranch,
+	stateSnapshotFromBranch,
+	hasStateSnapshot,
 	type BranchEntryLike,
 	type PromptFragment,
 } from "./assemble.ts";
@@ -68,7 +72,7 @@ import {
 	serializeForSummary,
 } from "./compact.ts";
 import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
-import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
+import { applyMvuPatch, findMvuRules, seedMvuIfNeeded } from "../mvu.ts";
 import {
 	compileStagePromptTemplates,
 	createEjsContext,
@@ -88,6 +92,7 @@ import {
 	type StageToolDeps,
 	type ToolRunResult,
 } from "./tools.ts";
+
 import { unifiedStageToolNames } from "../tools/adapters/stage.ts";
 import {
 	mcpStageTools,
@@ -647,6 +652,8 @@ const pendingScribesFromBranch = (branch: BranchEntryLike[], completed = complet
 		);
 };
 
+type StateRepairBinding = { token: string; sessionId: string; leafId: string | null; stateJson: string; instruction: string; repair: ParsedStateRepair; nextState: WorldState; changes: StateRepairChange[] };
+type StateRepairAudit = { before: WorldState; undoOf: string } | { before: WorldState; instruction: string; repair: ParsedStateRepair };
 export class StageEngine {
 	#deps: StageEngineDeps;
 	#busy = false;
@@ -803,9 +810,11 @@ export class StageEngine {
 	 * 本拍模型请求的存档名（`worldline_store` 登记，封笔后由 #turn 兑现）。
 	 * 每拍开头清空——报错/空手/中断都会从 #turn 里提前 return，只有这里清才不会漏到下一拍。
 	 */
+
 	#pendingSave: string | null = null;
 	/** 本拍 panel_write 声明的面板数据（面板名→初始树）；封笔后并进状态树，见 performTurn */
 	#pendingPanelData: Record<string, Record<string, unknown>> = {};
+	#stateRepair: StateRepairBinding | null = null;
 
 	constructor(deps: StageEngineDeps) {
 		this.#deps = deps;
@@ -926,6 +935,132 @@ export class StageEngine {
 			this.#refreshing = false;
 			await this.#drain();
 		}
+	}
+
+	#repairBaseline(branch: BranchEntryLike[], sessionId: string, entries: BranchEntryLike[]): WorldState {
+		return stateFromBranch(branch, () => {
+			if (hasStateSnapshot(entries)) return defaultState();
+			const file = this.#deps.getStateFile?.(sessionId);
+			return file ? loadState(file) : defaultState();
+		});
+	}
+
+	async proposeStateRepair(instruction: string): Promise<StateRepairParseResult> {
+		if (this.#busy || this.#refreshing) return { kind: "invalid", reason: "当前有生成或记账任务。" };
+		const text = instruction.trim();
+		if (!text || text.length > STATE_REPAIR_INSTRUCTION_MAX) return { kind: "invalid", reason: `请填写 1–${STATE_REPAIR_INSTRUCTION_MAX} 字符的纠错说明。` };
+		const model = this.#deps.getModel();
+		if (!model) return { kind: "invalid", reason: "尚未配置剧情模型。" };
+		const session = this.#deps.getSession();
+		const sm = session.sessionManager;
+		const materials = loadStageMaterials(this.#deps.cwd);
+		const leafBefore = sm.getLeafId();
+		const rawBranch = applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[];
+		const stateProbe = { type: "custom", customType: STATE_ENTRY_TYPE } as BranchEntryLike;
+		if (!storyBranch([...rawBranch, stateProbe]).includes(stateProbe)) {
+			return { kind: "invalid", reason: "当前旧写作分支会隐藏状态快照；请先回到角色扮演分支再纠错。" };
+		}
+		const branch = storyBranch(rawBranch) as BranchEntryLike[];
+		const rawState = this.#repairBaseline(branch, sm.getSessionId(), sm.getEntries() as BranchEntryLike[]);
+		const beats = completedStoryBeats(branch);
+		const recent = beats.slice(-12);
+		const story = recent.length ? serializeForSummary(branch.slice(recent[0]!.start, recent.at(-1)!.end + 1), materials.config.userName, materials.card.name).slice(-STATE_REPAIR_STORY_MAX) : "";
+		const state = rawState;
+		this.#refreshing = true;
+		this.#stateRepair = null;
+		try {
+			const auth = await this.#deps.getAuth(model);
+			const prompt = buildStateRepairPrompt({ state, instruction: text, story, charName: materials.card.name, userName: materials.config.userName, mvuRules: state.mvu ? findMvuRules(materials.card.book) : undefined });
+			const response = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, "scribe");
+			if (typeof response !== "string") return { kind: "invalid", reason: response.error };
+			if (this.#deps.getSession() !== session || sm.getLeafId() !== leafBefore || JSON.stringify(this.#repairBaseline(sm.getBranch() as BranchEntryLike[], sm.getSessionId(), sm.getEntries() as BranchEntryLike[])) !== JSON.stringify(rawState)) {
+				return { kind: "invalid", reason: "修复分析期间分支或状态发生变化，请重新提交。" };
+			}
+			const result = parseStateRepairResult(response, { state, instruction: text, story });
+			if (result.kind === "proposal") {
+				const token = randomUUID();
+				this.#stateRepair = { token, sessionId: sm.getSessionId(), leafId: leafBefore, stateJson: JSON.stringify(rawState), instruction: text, repair: result.repair, nextState: result.state, changes: result.changes };
+				return { ...result, token } as StateRepairParseResult & { token: string };
+			}
+			return result;
+		} catch (error) {
+			return { kind: "invalid", reason: error instanceof Error ? error.message : String(error) };
+		} finally {
+			this.#refreshing = false;
+			await this.#drain();
+		}
+	}
+
+	applyStateRepair(token: string): { ok: boolean; reason?: string; state?: WorldState; warning?: boolean; changes?: StateRepairChange[]; undoToken?: string } {
+		const proposal = this.#stateRepair;
+		if (!proposal || proposal.token !== token) return { ok: false, reason: "修复提案已失效，请重新分析。" };
+		if (this.#busy || this.#refreshing) return { ok: false, reason: "当前有生成或记账任务。" };
+		const sm = this.#deps.getSession().sessionManager;
+		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];
+		const state = this.#repairBaseline(branch, sm.getSessionId(), sm.getEntries() as BranchEntryLike[]);
+		if (sm.getSessionId() !== proposal.sessionId || sm.getLeafId() !== proposal.leafId || JSON.stringify(state) !== proposal.stateJson) {
+			this.#stateRepair = null;
+			return { ok: false, reason: "提案期间分支或账本已变化，请重新分析。" };
+		}
+		const before = structuredClone(state);
+		const next = structuredClone(proposal.nextState);
+		const audit: StateRepairAudit = { instruction: proposal.instruction, repair: proposal.repair, before };
+		sm.appendCustomEntryAndFlush(STATE_ENTRY_TYPE, { ...next, __stateRepair: audit });
+		let warning = false;
+		try {
+			const stateFile = this.#deps.getStateFile?.(sm.getSessionId());
+			if (stateFile) saveState(stateFile, next);
+		} catch (error) {
+			warning = true;
+			console.error(`[state-repair] branch committed; state cache update failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		this.#stateRepair = null;
+		return { ok: true, state: next, ...(warning ? { warning: true } : {}), changes: proposal.changes, undoToken: this.stateRepairStatus().undoToken };
+	}
+
+	#undoTarget() {
+		const sm = this.#deps.getSession().sessionManager;
+		const rawBranch = sm.getBranch() as BranchEntryLike[];
+		const branch = storyBranch(rawBranch);
+		let auditEntry: BranchEntryLike | undefined;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i]!;
+			if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE && (entry.data as { __stateRepair?: StateRepairAudit } | undefined)?.__stateRepair) {
+				auditEntry = entry;
+				break;
+			}
+		}
+		const audit = (auditEntry?.data as { __stateRepair: StateRepairAudit } | undefined)?.__stateRepair;
+		if (!auditEntry?.id || !audit) return { status: { undoable: false } };
+		if ("undoOf" in audit) return { status: { undoable: false, reason: "最近的状态修复已经撤销。" } };
+		if (stateSnapshotFromBranch(rawBranch)?.id !== auditEntry.id) return { status: { undoable: false, reason: "修复后已有状态写入，不能安全撤销。" } };
+		const probe = { type: "custom", customType: STATE_ENTRY_TYPE } as BranchEntryLike;
+		if (!storyBranch([...rawBranch, probe]).includes(probe)) return { status: { undoable: false, reason: "当前旧写作分支会隐藏状态快照；请先回到角色扮演分支再纠错。" } };
+		const undoToken = JSON.stringify([sm.getSessionId(), sm.getLeafId(), auditEntry.id]);
+		return { status: { undoable: true, undoToken }, sm, auditId: auditEntry.id, audit, branch: rawBranch };
+	}
+
+	stateRepairStatus(): { undoable: boolean; undoToken?: string; reason?: string } {
+		return this.#undoTarget().status;
+	}
+
+	undoStateRepair(token: string): { ok: boolean; reason?: string; state?: WorldState; warning?: boolean } {
+		if (this.#busy || this.#refreshing) return { ok: false, reason: "当前有生成或记账任务。" };
+		const { status, sm, auditId, audit, branch } = this.#undoTarget();
+		if (!sm || !auditId || !audit || !branch) return { ok: false, reason: status.reason ?? "没有可撤销的状态修复。" };
+		if (token !== status.undoToken) return { ok: false, reason: "分支或待撤销的修复已变化，请重新查看状态。" };
+		const restored = structuredClone(audit.before);
+		const undoAudit: StateRepairAudit = { undoOf: auditId, before: stateFromBranch(branch) };
+		sm.appendCustomEntryAndFlush(STATE_ENTRY_TYPE, { ...restored, __stateRepair: undoAudit });
+		let warning = false;
+		try {
+			const stateFile = this.#deps.getStateFile?.(sm.getSessionId());
+			if (stateFile) saveState(stateFile, restored);
+		} catch (error) {
+			warning = true;
+			console.error(`[state-repair] undo committed; state cache update failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		return { ok: true, state: restored, ...(warning ? { warning: true } : {}) };
 	}
 	/** Build a read-only view of the current roleplay branch for the /btw assistant. */
 	btwAssembly(): { systemPrompt: string; stageBlock: string; cardDir: string | null; chatDir: string | null; config: ReturnType<typeof loadStageConfig> } {

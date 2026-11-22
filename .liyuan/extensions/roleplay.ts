@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@liyuan/agent-runtime";
 import { publishStageConnection, type StageHooks } from "../../src/stage/bridge.ts";
+import { hasStateSnapshot, stateFromBranch, stateSnapshotFromBranch, type BranchEntryLike } from "../../src/stage/assemble.ts";
 import { completeSimple } from "@liyuan/ai/compat";
 import { Type } from "typebox";
 import { StoryHistory, listStoryFiles, storyDirectory } from "../../src/stage/story-history.ts";
@@ -344,13 +345,10 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	/** 从当前剧情分支上最近的快照恢复账本；无快照返回 false */
 	const restoreStateFromBranch = (sm: { getBranch: (fromId?: string) => unknown[] }): boolean => {
 		try {
-			const branch = sm.getBranch() as Array<Record<string, unknown>>;
-			for (let i = branch.length - 1; i >= 0; i--) {
-				const e = branch[i];
-				if (e.type === "custom" && e.customType === "rp-state" && e.data && typeof e.data === "object") {
-					state = { ...defaultState(), ...(e.data as Partial<WorldState>) };
-					return true;
-				}
+			const branch = sm.getBranch() as BranchEntryLike[];
+			if (stateSnapshotFromBranch(branch)) {
+				state = stateFromBranch(branch);
+				return true;
 			}
 		} catch {
 			// 树读取失败按无快照处理
@@ -391,23 +389,11 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		}
 	};
 
-	/** 同 syncPanelsFromDisk：世界状态经助手/面板编辑后，剧情侧须从盘对齐 */
-	const syncStateFromDisk = () => {
-		if (!stateFile) return;
-		try {
-			const disk = { ...defaultState(), ...loadState(stateFile) };
-			if (JSON.stringify(disk) !== JSON.stringify(state)) {
-				state = disk;
-				snapshotState();
-			}
-		} catch {
-			// 保持内存
-		}
-	};
+	// The server already appended the visible branch snapshot; update memory only.
+	registerStoryStateSync((branchState) => { state = branchState; });
 
-	// 供 server importPanels / applyStatePatch 直调（不经 slash 命令桥）
+	// 供 server importPanels 直调（不经 slash 命令桥）
 	registerStoryPanelSync(syncPanelsFromDisk);
-	registerStoryStateSync(syncStateFromDisk);
 
 	/** 从当前剧情分支上最近的面板快照恢复；无快照返回 false */
 	const restorePanelsFromBranch = (sm: { getBranch: (fromId?: string) => unknown[] }): boolean => {
@@ -1003,9 +989,13 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 
 			stateFile = chatDataPath(ctx.cwd, ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId(), "state");
 			state = loadState(stateFile);
-			// fork 出的新会话文件没有状态缓存：从复制过来的剧情分支快照恢复
-			if (JSON.stringify(state) === JSON.stringify(defaultState()) && restoreStateFromBranch(ctx.sessionManager)) {
-				saveState(stateFile, state);
+			// 分支快照是账本权威；磁盘状态只是缓存，始终用当前分支恢复并尽力刷新缓存。
+			if (restoreStateFromBranch(ctx.sessionManager)) {
+				try { saveState(stateFile, state); } catch { /* 分支快照仍可直接使用 */ }
+			} else if (hasStateSnapshot(ctx.sessionManager.getEntries() as BranchEntryLike[])) {
+				// A sibling has snapshots, so the shared cache cannot identify this branch's ledger.
+				state = defaultState();
+				try { saveState(stateFile, state); } catch { /* current branch remains the source of truth */ }
 			}
 			// 面板同款装载：缓存缺失（fork/新拉起）时从剧情分支快照恢复
 			panelsFile = chatDataPath(ctx.cwd, ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId(), "panels");

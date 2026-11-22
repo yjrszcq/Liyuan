@@ -765,11 +765,21 @@ export class SessionManager {
             appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
         }
     }
-    _appendEntry(entry) {
+    _appendEntry(entry, forceFlush = false) {
         this.fileEntries.push(entry);
         this.byId.set(entry.id, entry);
         this.leafId = entry.id;
-        this._persist(entry);
+        try {
+            this._persist(entry);
+            if (forceFlush)
+                this.flush();
+        }
+        catch (error) {
+            this.fileEntries.pop();
+            this.byId.delete(entry.id);
+            this.leafId = entry.parentId;
+            throw error;
+        }
     }
     /** Append a message as child of current leaf, then advance leaf. Returns entry id.
      * Does not allow writing CompactionSummaryMessage and BranchSummaryMessage directly.
@@ -841,6 +851,19 @@ export class SessionManager {
             timestamp: new Date().toISOString(),
         };
         this._appendEntry(entry);
+        return entry.id;
+    }
+    /** Append and force persistence as one in-memory commit; roll back indexes if either write fails. */
+    appendCustomEntryAndFlush(customType, data) {
+        const entry = {
+            type: "custom",
+            customType,
+            data,
+            id: generateId(this.byId),
+            parentId: this.leafId,
+            timestamp: new Date().toISOString(),
+        };
+        this._appendEntry(entry, true);
         return entry.id;
     }
     /** Append a session info entry (e.g., display name). Returns entry id. */

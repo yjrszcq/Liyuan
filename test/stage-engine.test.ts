@@ -12,6 +12,8 @@ import { getModel, registerFauxProvider, streamSimple } from "@liyuan/ai/compat"
 
 import { StageEngine, type StageStreamFn, type StageEngineDeps } from "../src/stage/engine.ts";
 import { getStageConnection } from "../src/stage/bridge.ts";
+import { syncStoryState } from "../src/story-sync.ts";
+import { applyPatch, defaultState, loadState, saveState } from "../src/state.ts";
 import { applyDraftRevisions } from "../src/stage/draft-projection.ts";
 import { DraftStore, draftDirectory } from "../src/stage/draft-store.ts";
 import { authoringHistory, conversationMode, CONVERSATION_MODE_TYPE, CONVERSATION_PROCESS_TYPE, storyBranch } from "../src/conversation-mode.ts";
@@ -81,6 +83,7 @@ const makeEngine = async (
 	sm: InstanceType<typeof SessionManager>,
 	model: unknown,
 	events: ConstructorParameters<typeof StageEngine>[0]["events"] = {},
+	getStateFile?: StageEngineDeps["getStateFile"],
 ) =>
 	await makePiEngine({
 		cwd,
@@ -89,6 +92,7 @@ const makeEngine = async (
 		getAuth: async () => ({}),
 		sideStreamFn: streamSimple as unknown as StageStreamFn,
 		events,
+		getStateFile,
 	});
 
 /** 封笔后的场记旁路。 */
@@ -99,6 +103,38 @@ const directBeat = (text: string | ((ctx: unknown) => unknown)) => [
 	typeof text === "string" ? fauxAssistantMessage(text) : text,
 	fauxScribeEmpty(),
 ];
+
+test("SessionManager：append 与 flush 持久化失败都回滚内存分支", () => {
+	for (const withAssistant of [false, true]) {
+		const { cwd, sm } = makeStage();
+		try {
+			sm.appendMessage({ role: "user", content: "起始消息", timestamp: Date.now() });
+			if (withAssistant) sm.appendMessage({ role: "assistant", content: "初始回复", timestamp: Date.now() });
+			const sessionFile = sm.getSessionFile();
+			assert.ok(sessionFile);
+			const leafBefore = sm.getLeafId();
+			const entriesBefore = sm.getEntries();
+			const branchBefore = sm.getBranch();
+			rmSync(sessionFile, { recursive: true, force: true });
+			mkdirSync(sessionFile);
+			let attemptedId: string | undefined;
+			const persist = sm._persist.bind(sm);
+			sm._persist = (entry) => {
+				attemptedId = entry.id;
+				persist(entry);
+			};
+
+			assert.throws(() => sm.appendCustomEntryAndFlush("rp-state", { inventory: ["未提交"] }));
+			assert.ok(attemptedId);
+			assert.equal(sm.getEntry(attemptedId), undefined, "failed entry must leave no indexed orphan");
+			assert.equal(sm.getLeafId(), leafBefore);
+			assert.deepEqual(sm.getEntries(), entriesBefore);
+			assert.deepEqual(sm.getBranch(), branchBefore);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+});
 
 test("引擎：一拍全链路（user 落树 → 流式 → assistant 落树 → 谢幕）", async () => {
 	const { cwd, sm } = makeStage();
@@ -143,6 +179,187 @@ test("手动刷新按当前分支对账，重复刷新不重复追加状态", as
 		const states = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state");
 		assert.equal(states.length, before + 1);
 		assert.equal(stateFromBranch(sm.getBranch()).characters["云澜"]?.affinity, 8);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：提案确认后写入当前分支，并只允许一次无后续写入的撤销", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		reg.setResponses([
+			...directBeat("我把怀表还给沈舟，她收进袖中。"),
+			fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] })),
+		]);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		await engine.performTurn("我交还怀表。");
+		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
+		const proposal = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+		assert.equal(proposal.kind, "proposal");
+		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
+		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.before, ["怀表"]);
+		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.after, []);
+		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
+		assert.equal(engine.applyStateRepair(proposal.token).ok, false, "even a same-value new state snapshot invalidates the proposal leaf");
+		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] }))] as never);
+		const fresh = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+		assert.equal(fresh.kind, "proposal");
+		if (fresh.kind !== "proposal" || !("token" in fresh)) return;
+		const applied = engine.applyStateRepair(fresh.token);
+		assert.equal(applied.ok, true);
+		const appliedLeaf = sm.getLeafId()!;
+		assert.ok(applied.undoToken);
+		syncStoryState(stateFromBranch(sm.getBranch() as BranchEntryLike[]));
+		assert.equal(sm.getLeafId(), appliedLeaf, "host sync must not append a duplicate repair snapshot");
+		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, []);
+		const reopened = SessionManager.open(sm.getSessionFile()!, join(cwd, "sessions"), cwd);
+		const snapshot = reopened.getBranch().at(-1);
+		assert.equal(snapshot?.type, "custom");
+		if (snapshot?.type !== "custom") throw new Error("missing repair snapshot");
+		const audit = snapshot.data.__stateRepair;
+		assert.equal(audit.instruction, "怀表已经还给沈舟，请从账本移除。");
+		assert.equal(audit.repair.evidence[0].quote, "我把怀表还给沈舟");
+		assert.equal(Object.hasOwn(stateFromBranch(reopened.getBranch() as BranchEntryLike[]), "__stateRepair"), false);
+		sm.appendCustomEntry("branch-marker", {});
+		assert.equal(engine.undoStateRepair(applied.undoToken).ok, false, "stale branch tokens cannot undo");
+		sm.branch(appliedLeaf);
+		const undone = engine.undoStateRepair(applied.undoToken);
+		assert.ok(undone.state);
+		assert.deepEqual(undone.state.inventory, ["怀表"]);
+		syncStoryState(undone.state);
+		assert.equal(engine.stateRepairStatus().undoable, false, "撤销动作本身不能再次翻转账本");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：缓存写入失败时仍如实报告已提交的分支状态并可撤销", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	let failCache = false;
+	try {
+		reg.setResponses([
+			...directBeat("我把怀表还给沈舟，她收进袖中。"),
+			fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] })),
+		]);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => failCache ? cwd : undefined);
+		await engine.performTurn("我交还怀表。");
+		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
+		const proposal = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+		assert.equal(proposal.kind, "proposal");
+		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
+		failCache = true;
+		const applied = engine.applyStateRepair(proposal.token);
+		assert.equal(applied.ok, true);
+		assert.equal(applied.warning, true);
+		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, []);
+		assert.ok(applied.undoToken);
+		const undone = engine.undoStateRepair(applied.undoToken);
+		assert.equal(undone.ok, true);
+		assert.equal(undone.warning, true);
+		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, ["怀表"]);
+		const cached = { ...defaultState(), inventory: ["怀表"], location: "旧桥" };
+		const reopened = SessionManager.open(sm.getSessionFile()!, join(cwd, "sessions"), cwd);
+		reopened.branch(JSON.parse(applied.undoToken)[2]);
+		const edit = applyPatch(stateFromBranch(reopened.getBranch() as BranchEntryLike[], () => cached), { location: "新桥" });
+		assert.deepEqual(edit.state.inventory, [], "manual edit must not resurrect the stale cache inventory");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：旧会话仅有磁盘账本时保留未修正字段，且缓存变化使提案失效", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const file = join(cwd, "legacy-state.json");
+		const cached = { ...defaultState(), inventory: ["怀表"], location: "旧桥" };
+		saveState(file, cached);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => file);
+		const response = () => fauxAssistantMessage(JSON.stringify({ patch: { location: "新桥" }, evidence: [{ source: "instruction", quote: "位置应为新桥" }] }));
+		reg.setResponses([response(), response()]);
+		const stale = await engine.proposeStateRepair("位置应为新桥");
+		assert.equal(stale.kind, "proposal");
+		if (stale.kind !== "proposal" || !("token" in stale)) throw new Error("missing proposal");
+		cached.inventory.push("纸伞");
+		saveState(file, cached);
+		assert.equal(engine.applyStateRepair(stale.token).ok, false);
+		const fresh = await engine.proposeStateRepair("位置应为新桥");
+		assert.equal(fresh.kind, "proposal");
+		if (fresh.kind !== "proposal" || !("token" in fresh)) throw new Error("missing proposal");
+		const applied = engine.applyStateRepair(fresh.token);
+		assert.deepEqual(loadState(file), { ...cached, location: "新桥" });
+		assert.ok(applied.undoToken);
+		assert.equal(engine.undoStateRepair(applied.undoToken).ok, true);
+		assert.deepEqual(loadState(file), cached);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：无当前分支快照时不继承有快照的 sibling 缓存", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const file = join(cwd, "state.json");
+		const abandoned = { ...defaultState(), inventory: ["废弃分支物品"], location: "废弃地点" };
+		sm.appendCustomEntry("rp-state", abandoned);
+		sm.resetLeaf();
+		saveState(file, abandoned);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => file);
+		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { location: "新地点" }, evidence: [{ source: "instruction", quote: "位置应为新地点" }] }))] as never);
+
+		const proposal = await engine.proposeStateRepair("位置应为新地点");
+		assert.equal(proposal.kind, "proposal");
+		if (proposal.kind !== "proposal" || !("token" in proposal)) throw new Error("missing proposal");
+		assert.deepEqual(proposal.changes.map((change) => change.path), ["location"]);
+		assert.equal(proposal.changes[0]?.before, "");
+		assert.equal(engine.applyStateRepair(proposal.token).ok, true);
+		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, []);
+		assert.equal(stateFromBranch(sm.getBranch() as BranchEntryLike[]).location, "新地点");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：不把尚未写入账本的卡初始 MVU 树隐式提交", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const cardPath = join(cwd, "card.json");
+		const card = JSON.parse(readFileSync(cardPath, "utf8"));
+		card.data.character_book = { entries: [{ uid: 1, comment: "[initvar]", content: "stats:\n  hp: 4", keys: [], constant: true, enabled: true }] };
+		writeFileSync(cardPath, JSON.stringify(card));
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { location: "新地点" }, evidence: [{ source: "instruction", quote: "位置应为新地点" }] }))] as never);
+		const proposal = await engine.proposeStateRepair("位置应为新地点");
+		assert.equal(proposal.kind, "proposal");
+		if (proposal.kind !== "proposal" || !("token" in proposal)) throw new Error("missing proposal");
+		assert.deepEqual(proposal.changes.map((change) => change.path), ["location"]);
+		assert.equal(engine.applyStateRepair(proposal.token).ok, true);
+		assert.equal(Object.hasOwn(stateFromBranch(sm.getBranch() as BranchEntryLike[]), "mvu"), false);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：旧写作分支会隐藏状态快照时拒绝生成提案", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		sm.appendMessage({ role: "user", content: "请调整旧写作分支", timestamp: Date.now(), details: { liyuanMode: "authoring" } });
+		const result = await engine.proposeStateRepair("修正当前账本。");
+		assert.equal(result.kind, "invalid");
+		if (result.kind === "invalid") assert.match(result.reason, /隐藏状态快照/);
+		assert.equal(engine.stateRepairStatus().undoable, false);
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });
