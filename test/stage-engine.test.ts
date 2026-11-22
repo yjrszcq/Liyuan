@@ -439,6 +439,32 @@ test("引擎压缩：compactNow() 手动压缩不等周期；流式中拒绝", a
 	}
 });
 
+test("引擎压缩：周期 1 在第七个完成拍自动生成摘要并保留最近六拍", async () => {
+	const { cwd, sm } = makeStage();
+	setCompactEvery(cwd, 1);
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const responses: unknown[] = [];
+		for (let i = 1; i <= 7; i++) responses.push(...directBeat(`第 ${i} 拍的正文。`));
+		responses.push(fauxAssistantMessage("## 前情提要\n自动生成的早期剧情摘要。"));
+		reg.setResponses(responses as never);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		for (let i = 1; i <= 7; i++) {
+			await engine.performTurn(`第 ${i} 拍我说的话。`);
+			const summaries = sm.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "rp-summary");
+			assert.equal(summaries.length, i === 7 ? 1 : 0, `完成第 ${i} 拍后的摘要数量`);
+		}
+		const data = sm.getBranch().find((entry) => entry.type === "custom" && entry.customType === "rp-summary")?.data as
+			{ summary?: string; turns?: number } | undefined;
+		assert.equal(data?.summary, "## 前情提要\n自动生成的早期剧情摘要。");
+		assert.equal(data?.turns, 1, "第七拍触发时只摘要六拍保留区之前的第一拍");
+		assert.equal(reg.getPendingResponseCount(), 0);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("扮演压缩：拍压缩后指示器折算——contextUsage 刷新为压缩后的值（小于 pi 的压缩前值）", async () => {
 	const { cwd, sm } = makeStage();
 	setCompactEvery(cwd, 0); // 自动压缩关闭，只测手动压缩后的折算
