@@ -77,6 +77,7 @@ export const server: Record<string, string> = {
 	"无可用模型": "No model available",
 	"流未产出最终消息": "The stream produced no final message",
 	"最终消息无文本": "The final message has no text",
+	"旁路回复被截断（stopReason=length）": "The side-model reply was truncated (stopReason=length)",
 	"扩展错误（{event}）：{error}": "Extension error ({event}): {error}",
 	"向量记忆：入库失败 · {error}": "Memory: failed to store · {error}",
 	"合并入已有条目": " merged into an existing entry",

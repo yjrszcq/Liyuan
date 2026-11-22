@@ -1498,9 +1498,12 @@ const sideEntryOf = (): { model: StageModelLike; thinking?: string; label?: stri
 		if (!base) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
 		if (!session.modelRuntime.hasConfiguredAuth(base.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
 		const m = applyEntryThinkingMap(base, entry);
+		// 多个条目可共用同一模型 ID；注册表只保留一个，回复预算以实际选中的条目为准。
+		const model = typeof entry.maxTokens === "number" && Number.isFinite(entry.maxTokens) && entry.maxTokens > 0
+			? { ...m, maxTokens: entry.maxTokens } : m;
 		if (warnedSideEntry) warnedSideEntry = "";
 		const thinking = thinkingLevelOfEntry(agent, sel.provider, sel.entry);
-		return { model: m as never, ...(thinking ? { thinking } : {}), label: sel.entry };
+		return { model, ...(thinking ? { thinking } : {}), label: sel.entry };
 	} catch (err) {
 		return warn(`解析失败（${err instanceof Error ? err.message : String(err)}）`); // i18n-ignore：终端日志
 	}
@@ -1559,7 +1562,7 @@ const sideTextOnce = async (
 		const s = sideStreamWithRelay(
 			model,
 			{ systemPrompt, messages: [{ role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() }] },
-			{ maxTokens: opts?.maxTokens ?? 4096, reasoning: (opts?.reasoning ?? "off") as never, signal: opts?.signal },
+			{ maxTokens: opts?.maxTokens ?? model.maxTokens ?? 4096, reasoning: (opts?.reasoning ?? "off") as never, signal: opts?.signal },
 		);
 		let final: AssistantMsgLike | null = null;
 		for await (const e of s) {
@@ -1567,6 +1570,7 @@ const sideTextOnce = async (
 			else if (e.type === "error") return { error: e.error?.errorMessage || `stopReason=${e.error?.stopReason ?? "?"}` };
 		}
 		if (!final) return { error: t("流未产出最终消息") };
+		if (final.stopReason === "length") return { error: t("旁路回复被截断（stopReason=length）") };
 		const text = final.content
 			.filter((c) => c.type === "text")
 			.map((c) => c.text ?? "")
@@ -2337,7 +2341,7 @@ const restHost: RestHost = {
 	// 预设声明与场记共用旁路模型选择；未配置旁路时才跟随剧情模型。
 	runSideText: (systemPrompt, userText, opts) =>
 		sideTextOnce((sideEntryOf()?.model ?? session.model) as StageModelLike | undefined, systemPrompt, userText, {
-			maxTokens: opts?.maxTokens ?? 4096,
+			maxTokens: opts?.maxTokens,
 			reasoning: opts?.reasoning ?? "off",
 			signal: opts?.signal,
 		}),

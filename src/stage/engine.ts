@@ -1940,8 +1940,7 @@ export class StageEngine {
 			: seededState;
 		const r = await runScribeTurn(
 			{
-				// 2048：账本+名录随剧情增长，patch 可能很长；1024 实测会截断出半截 JSON（8/03）
-				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, 2048, "scribe"),
+				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, "scribe"),
 				appendStateEntry: (s) => sm.appendCustomEntry(STATE_ENTRY_TYPE, s),
 				getLeafId: () => sm.getLeafId(),
 				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
@@ -1956,7 +1955,10 @@ export class StageEngine {
 				mvuRules,
 			},
 		);
-		if (r.kind === "failed") console.error(`[stage-scribe] 记账跳过：${r.error}`);
+		if (r.kind === "failed") {
+			console.error(`[stage-scribe] 记账跳过：${r.error}`);
+			if (!this.#abort?.signal.aborted) ev.onNotify?.("warning", `记账失败：${r.error}`);
+		}
 		/**
 		 * 场记这拍没落账（无变化/解析失败/切了分支），新声明的面板数据就没人写下来——
 		 * 而 panel_write 不会再调一次，那棵树会永久丢失、面板永远显示不出值。所以补一笔。
@@ -2015,7 +2017,7 @@ export class StageEngine {
 			ev.onActivity?.(startDetail);
 			ev.onCompaction?.({ state: "start", kind: "discussion", detail: startDetail });
 			const prompt = buildDiscussionSummaryPrompt({ conversationText: plan.conversationText, ...(plan.previousSummary ? { previousSummary: plan.previousSummary } : {}) });
-			const resp = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, 4096, "compact");
+			const resp = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, "compact");
 			if (typeof resp !== "string" || !resp.trim()) {
 				const error = typeof resp === "string" ? "摘要为空" : resp.error;
 				console.error(`[stage-discussion] 压缩跳过：${error}`);
@@ -2068,8 +2070,7 @@ export class StageEngine {
 			const agentStoryDir = chatDir && chatModeOfSessionDir(sm.getSessionDir?.()) === "agent" ? storyDirectory(chatDir) : undefined;
 			const c = await runCompaction(
 				{
-					// 4096：摘要要装下前情/人物/伏笔/事实账五节，且要合并上一份摘要
-					sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, 4096, "compact"),
+					sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, "compact"),
 					appendSummaryEntry: (data: RpSummaryData) => sm.appendCustomEntry(SUMMARY_ENTRY_TYPE, data),
 					getLeafId: () => sm.getLeafId(),
 					archive: this.#deps.archiveCompacted
@@ -2482,7 +2483,6 @@ export class StageEngine {
 		systemPrompt: string,
 		userText: string,
 		auth: { apiKey?: string; headers?: Record<string, string | null> },
-		maxTokens = 8192,
 		kind: SideTextStat["kind"] = "scribe",
 		reasoning: string | undefined = "off",
 	): Promise<string | { error: string }> {
@@ -2492,6 +2492,8 @@ export class StageEngine {
 		 */
 		const side = this.#deps.getSideEntry?.();
 		const chosen = side?.model ?? model;
+		const maxTokens = typeof chosen.maxTokens === "number" && Number.isFinite(chosen.maxTokens) && chosen.maxTokens > 0
+			? chosen.maxTokens : 8192;
 		/**
 		 * 换了模型就得换 key：入参那份 auth 是调用点按**剧情模型**取的，
 		 * 旁路模型若在另一个渠道上，拿它去发必然 401。
@@ -2593,6 +2595,9 @@ export class StageEngine {
 				}
 				const text = textOfAssistant(final);
 				report(text.length);
+				if (final.stopReason === "length") {
+					return { error: `旁路回复被截断（stopReason=length；配置上限 ${maxTokens} token）` };
+				}
 				return text || { error: "最终消息无文本" };
 			} catch (err) {
 				const errMsg = err instanceof Error ? err.message : String(err);

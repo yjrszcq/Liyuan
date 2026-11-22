@@ -397,6 +397,12 @@ test("引擎压缩：compactNow() 手动压缩不等周期；流式中拒绝", a
 			"everyNTurns=0 时不自动压缩",
 		);
 
+		const leafBefore = sm.getLeafId();
+		reg.setResponses([fauxAssistantMessage("## 前情提要\n被截断的摘要", { stopReason: "length" })]);
+		const truncated = await engine.compactNow();
+		assert.equal(truncated.kind, "failed");
+		assert.equal(sm.getLeafId(), leafBefore, "截断不能移动摘要切点");
+
 		reg.setResponses([fauxAssistantMessage("## 前情提要\n手动压缩产出的摘要。")]);
 		const r = await engine.compactNow();
 		assert.equal(r.kind, "compacted");
@@ -526,15 +532,15 @@ test("ask：注入 askUser 时 ask 上清单", async () => {
  */
 test("引擎：旁路调用走 sideEntry 的模型与它自己的档，并按它重取鉴权", async () => {
 	const { cwd, sm } = makeStage();
-	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }, { id: "faux-side" }] });
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }, { id: "faux-side", maxTokens: 12000 }] });
 	try {
 		reg.setResponses(directBeat("云澜垂眸受了半礼。") as never);
-		const calls: Array<{ id: string; reasoning: unknown }> = [];
+		const calls: Array<{ id: string; reasoning: unknown; maxTokens: unknown }> = [];
 		const authFor: string[] = [];
-		const recording = ((model: { id: string }, ctx: unknown, options: { reasoning?: unknown }) => {
-			calls.push({ id: model.id, reasoning: options?.reasoning });
+		const recording: StageStreamFn = (model, ctx, options) => {
+			calls.push({ id: model.id, reasoning: options?.reasoning, maxTokens: options?.maxTokens });
 			return (streamSimple as unknown as StageStreamFn)(model as never, ctx as never, options as never);
-		}) as unknown as StageStreamFn;
+		};
 
 		const engine = await makePiEngine({
 			cwd,
@@ -554,7 +560,30 @@ test("引擎：旁路调用走 sideEntry 的模型与它自己的档，并按它
 		const side = calls.filter((c) => c.id === "faux-side");
 		assert.ok(side.length > 0, "场记那一发走旁路条目的模型");
 		assert.equal(side[0]!.reasoning, "off", "档取自那条条目，不是引擎自己定的");
+		assert.equal(side[0]!.maxTokens, 12000);
 		assert.ok(authFor.includes("faux-side"), "鉴权按旁路模型重取，不能沿用剧情模型的 key");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("场记：完整 JSON 形状的截断回答不覆盖已知状态，并通知用户", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const notices: string[] = [];
+		reg.setResponses([
+			fauxAssistantMessage("天色渐晚。"), fauxAssistantMessage('{"patch":{"time":"黄昏"}}'),
+			fauxAssistantMessage("灯亮了。"), fauxAssistantMessage('{"patch":{"time":"午夜"}}', { stopReason: "length" }),
+		]);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), { onNotify: (_level, text) => notices.push(text) });
+		await engine.performTurn("等一会。");
+		const turn = await engine.performTurn("点灯。");
+		assert.ok(turn.entryId && !turn.error);
+		const snapshots = sm.getBranch().flatMap((e) => e.type === "custom" && e.customType === "rp-state" ? [e.data.time] : []);
+		assert.deepEqual(snapshots, ["黄昏"]);
+		assert.ok(notices.some((text) => text.includes("记账失败") && text.includes("length")));
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });
