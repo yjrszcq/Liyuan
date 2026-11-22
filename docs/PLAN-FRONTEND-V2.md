@@ -137,3 +137,4 @@
 - 状态栏在当前会话分支存在待补场记时显示数量与「重新记账」按钮；按钮只重试持久化待补拍，失败保留入口；hello/结构化 WebSocket 帧同步重连和分支变化后的数量。
 - 验证（2026-11-22）：`node --test test/*.test.ts` 与 `npm run web:build` 通过；Chromium + 确定性协议场景桩验证待补提示、重试期间按钮禁用、失败后保留入口、成功后收起，以及较新的 hello/WS 数量不被迟到 REST 响应覆盖。Web typecheck 仍被 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 的 7 项既有诊断阻断，本次修改文件无诊断。
 - 2026-11-23 修复名录显式删除复活：旧账本首次迁移时完整保留已有实体；此后只登记当前活跃项与本次明确更新的实体。删除离场条目不改 `WorldState`，无关补丁不再将其补回，后续明确重现仍会登记。覆盖上游 [#21](https://github.com/weidu12123/Liyuan/issues/21)。
+- 独立复审（2026-11-23）：名录删除只移除索引行，世界状态账本继续保留历史角色；不相关 `/api/state` 时间补丁后浏览器中的离场人物仍不复活。旧结构迁移、活跃项保护、删除后无关更新、明确重现及同补丁删除优先均经复核。`node --test test/roster.test.ts` 11 项通过；`npm test` 922 项（917 通过、5 跳过）；`npm run web:build` 通过，保留既有 500 kB chunk 警告。
