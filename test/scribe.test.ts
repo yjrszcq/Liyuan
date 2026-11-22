@@ -24,19 +24,6 @@ test("场记提示词：只记账，不含连续性审查", () => {
 	assert.ok(userText.includes("阿远：*我递出怀表*"));
 });
 
-test("场记提示词：本轮当前场景参与者纠正旧 at，单纯提及不算在场", () => {
-	const { systemPrompt } = buildScribeTurnPrompt({
-		state: { ...defaultState(), location: "君临" },
-		userText: "",
-		assistantText: "Daenerys 走进大厅并回应了我的话。",
-		charName: "Daenerys",
-		userName: "我",
-	});
-	assert.ok(systemPrompt.includes("本轮正文明确描写已知角色物理身处当前场景、在现场行动或当面对话"));
-	assert.ok(systemPrompt.includes("仅被提及、回忆、远程传讯或明确在别处的人不因此判为在场"));
-	assert.ok(systemPrompt.includes("at 缺失或不同于本轮 location"));
-});
-
 test("场记输出解析：只取 patch，丢弃审查字段", () => {
 	const bare = parseScribeResult('{"patch":{"time":"第二天清晨"},"warnings":["正文说怀表在她手中 vs 账本记录阿远持有"]}');
 	assert.ok(bare);

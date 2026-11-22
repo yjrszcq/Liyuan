@@ -36,6 +36,24 @@ test("名录送模索引限定长度并标记省略历史条目", () => {
 	assert.ok(!index.includes("Event 0"));
 });
 
+test("名录四类索引的预算包含省略提示", () => {
+	const entries = (label: string) => Object.fromEntries([
+		...Array.from({ length: 10 }, (_, i) => [`旧记录${i}${"旧".repeat(750)}`, ""] as const),
+		["新".repeat(750 - `${label}：`.length), ""] as const,
+	]);
+	const index = formatRosterIndex({
+		...defaultState(),
+		roster: { characters: entries("人物"), items: entries("物品"), events: entries("剧情线"), places: entries("地点") },
+	});
+	const sections = index.split("；");
+	assert.equal(sections.length, 4);
+	for (const section of sections) {
+		assert.ok(section.length <= 750, `section length=${section.length}`);
+		assert.match(section, /另有 11 条历史记录未列$/);
+		assert.ok(!section.includes("新".repeat(10)));
+	}
+});
+
 test("名录容量：人物、物品、事件和地点各自保留最新上限", () => {
 	let state = defaultState();
 	const characters = Object.fromEntries(Array.from({ length: 110 }, (_, i) => [`角色${i}`, { affinity: 0, status: "", notes: "" }]));
@@ -75,7 +93,6 @@ test("角色在本轮重新记为当前地点后恢复在场状态", () => {
 	assert.equal(returned.characters.Daenerys?.at, returned.location);
 	assert.match(formatState(returned), /Daenerys：.*在场/);
 });
-
 
 test("名录一句话超长截断", () => {
 	const r = applyPatch(defaultState(), { characters: { 龙王: { status: "一".repeat(80) } } });
@@ -134,9 +151,15 @@ test("名录编辑：删除的离场条目不因无关补丁复活，明确重�
 	const afterUnrelatedPatch = applyPatch(deleted, { time: "次日清晨" }).state;
 	assert.ok(!("苏茜" in (afterUnrelatedPatch.roster?.characters ?? {})), "无关状态写入不得重建已删除人物");
 	assert.ok(!("山门" in (afterUnrelatedPatch.roster?.places ?? {})));
+	assert.ok(!("次日清晨" in (afterUnrelatedPatch.roster?.places ?? {})), "时间不是地点");
 	assert.ok(!("铁剑" in (afterUnrelatedPatch.roster?.items ?? {})));
 	assert.ok(!("旧约" in (afterUnrelatedPatch.roster?.events ?? {})));
 	assert.ok("苏茜" in afterUnrelatedPatch.characters);
+
+	const afterStatusPatch = applyPatch(afterUnrelatedPatch, { characters: { 苏茜: { status: "休息中" } } }).state;
+	assert.ok(!("山门" in (afterStatusPatch.roster?.places ?? {})), "未提供新所在地时不恢复已删除地点");
+	const explicitLocation = applyPatch(afterStatusPatch, { characters: { 苏茜: { at: "山门" } } }).state;
+	assert.ok("山门" in (explicitLocation.roster?.places ?? {}), "明确记载所在地时允许重新登记");
 
 	const returned = applyPatch(afterUnrelatedPatch, {
 		location: "山门",

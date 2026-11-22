@@ -114,7 +114,6 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 				if (typeof value === "string") {
 					next[key] = value;
 					applied.push(`${key} → ${value}`);
-					rosterUpdates.places.add(value);
 				} else warnings.push(`${key} 需要字符串，已忽略`);
 				break;
 			}
@@ -135,10 +134,12 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 						if (typeof p.affinity === "number") cur.affinity = clamp(Math.round(p.affinity), -100, 100);
 						if (typeof p.status === "string") cur.status = p.status;
 						if (typeof p.notes === "string") cur.notes = p.notes;
-						if (typeof p.at === "string") cur.at = p.at;
+						if (typeof p.at === "string") {
+							cur.at = p.at;
+							if (p.at) rosterUpdates.places.add(p.at);
+						}
 						next.characters[name] = cur;
 						rosterUpdates.characters.add(name);
-						if (cur.at) rosterUpdates.places.add(cur.at);
 						applied.push(`characters.${name} 已更新`);
 					}
 				} else warnings.push("characters 需要对象，已忽略");
@@ -332,18 +333,26 @@ function rosterSection(label: string, entries: Array<[string, string]>): string 
 	const prefix = `${label}：`;
 	const recent: string[] = [];
 	let omitted = 0;
+	let length = prefix.length;
+	const omission = () => `另有 ${omitted} 条历史记录未列`;
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const [name, blurb] = entries[i]!;
 		const value = blurb ? `${name}（${blurb}）` : name;
-		const note = omitted ? `、另有 ${omitted} 条历史记录未列` : "";
-		if (`${prefix}${[value, ...recent].join("、")}${note}`.length > ROSTER_SECTION_MAX_CHARS) {
+		const added = value.length + (recent.length ? 1 : 0);
+		if (length + added + (omitted ? 1 + omission().length : 0) > ROSTER_SECTION_MAX_CHARS) {
 			omitted++;
 			continue;
 		}
-		recent.unshift(value);
+		recent.push(value);
+		length += added;
 	}
-	const note = omitted ? `${recent.length ? "、" : ""}另有 ${omitted} 条历史记录未列` : "";
-	return `${prefix}${recent.join("、")}${note}`;
+	// 省略条数向后扫描时还会增长，可能挤掉此前已收下的最新条目。
+	while (recent.length && omitted && length + 1 + omission().length > ROSTER_SECTION_MAX_CHARS) {
+		length -= recent.pop()!.length + (recent.length ? 1 : 0);
+		omitted++;
+	}
+	const note = omitted ? `${recent.length ? "、" : ""}${omission()}` : "";
+	return `${prefix}${recent.reverse().join("、")}${note}`;
 }
 
 /** Render the most recent roster entries for the model; this index is not exhaustive. */
