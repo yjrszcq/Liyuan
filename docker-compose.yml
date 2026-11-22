@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: liyuan:1.0.0
+    image: liyuan:dev
     container_name: liyuan
     restart: unless-stopped
     ports:
