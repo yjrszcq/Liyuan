@@ -268,14 +268,14 @@ export function rebuildHistory(
 	return { history, lastUserText, lastNarrativeText, ...(active ? { summary: active.summary } : {}) };
 }
 
-/** 世界状态 = f(分支)：最近一条 rp-state 快照；无快照 = 初始状态（R4 读侧） */
+/** World state = f(branch): newest legacy snapshot or scribe checkpoint. */
 export function stateFromBranch(branch: BranchEntryLike[]): WorldState {
 	branch = storyBranch(branch);
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const e = branch[i];
-		if (e.type === "custom" && e.customType === "rp-state" && e.data && typeof e.data === "object") {
-			return { ...defaultState(), ...(e.data as Partial<WorldState>) };
-		}
+		if (e.type !== "custom" || e.customType !== "rp-state" || !e.data || typeof e.data !== "object") continue;
+		const { __scribeBeatId: _checkpoint, ...state } = e.data as Record<string, unknown>;
+		return { ...defaultState(), ...(state as Partial<WorldState>) };
 	}
 	return defaultState();
 }

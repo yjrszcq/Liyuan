@@ -602,16 +602,55 @@ test("场记：完整 JSON 形状的截断回答不覆盖已知状态，并通�
 	try {
 		const notices: string[] = [];
 		reg.setResponses([
-			fauxAssistantMessage("天色渐晚。"), fauxAssistantMessage('{"patch":{"time":"黄昏"}}'),
-			fauxAssistantMessage("灯亮了。"), fauxAssistantMessage('{"patch":{"time":"午夜"}}', { stopReason: "length" }),
+			fauxAssistantMessage("天色渐晚。"), fauxAssistantMessage('{"patch":{"time":"黄昏"}}', { stopReason: "length" }),
+			fauxAssistantMessage('{"patch":{"time":"黄昏"}}', { stopReason: "length" }),
+			fauxAssistantMessage('{"patch":{"time":"黄昏"}}'),
+			(ctx: any) => {
+				assert.match(JSON.stringify(ctx), /黄昏/, "重试补记后的账本必须先进入下一拍提示词");
+				return fauxAssistantMessage("灯亮了。");
+			},
+			fauxAssistantMessage('{"patch":{"time":"午夜"}}', { stopReason: "length" }),
 		]);
-		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), { onNotify: (_level, text) => notices.push(text) });
+		let engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), { onNotify: (_level, text) => notices.push(text) });
 		await engine.performTurn("等一会。");
+		const sessionFile = sm.getSessionFile();
+		assert.ok(sessionFile);
+		const reopened = SessionManager.open(sessionFile!, join(cwd, "sessions"), cwd);
+		assert.ok(reopened.getBranch().some((e) => e.type === "custom" && e.customType === "rp-scribe-pending"), "待补记必须持久化到会话树");
+		engine = await makeEngine(cwd, reopened, reg.getModel("faux-rp"), { onNotify: (_level, text) => notices.push(text) });
+		const blocked = await engine.performTurn("点灯。");
+		assert.match(blocked.error ?? "", /前一拍状态仍未同步/);
+		assert.equal(reopened.getBranch().filter((e) => e.type === "message" && e.message?.role === "user").length, 1, "失败门禁不得落入新用户输入");
 		const turn = await engine.performTurn("点灯。");
 		assert.ok(turn.entryId && !turn.error);
-		const snapshots = sm.getBranch().flatMap((e) => e.type === "custom" && e.customType === "rp-state" ? [e.data.time] : []);
+		const snapshots = reopened.getBranch().flatMap((e) => e.type === "custom" && e.customType === "rp-state" ? [e.data.time] : []);
 		assert.deepEqual(snapshots, ["黄昏"]);
 		assert.ok(notices.some((text) => text.includes("记账失败") && text.includes("length")));
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("场记：待补拍的空补丁也推进分支完成标记", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		reg.setResponses([
+			fauxAssistantMessage("第一拍完成。"),
+			fauxAssistantMessage('{"patch":{"time":"黄昏"}}', { stopReason: "length" }),
+			fauxAssistantMessage('{"patch":{}}'),
+			fauxAssistantMessage("第二拍继续。"),
+			fauxAssistantMessage('{"patch":{}}'),
+		]);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		await engine.performTurn("开始第一拍。");
+		const pending = sm.getBranch().find((e) => e.type === "custom" && e.customType === "rp-scribe-pending");
+		assert.ok(pending);
+		const turn = await engine.performTurn("开始第二拍。");
+		assert.ok(turn.entryId && !turn.error, "空补丁补记成功后应允许下一拍继续");
+		assert.ok(sm.getBranch().some((e) => e.type === "custom" && e.customType === "rp-scribe-complete" && e.data.beatId === pending.data.beatId));
+		assert.equal(sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state").length, 0, "空补丁不制造状态快照");
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });
@@ -1757,6 +1796,7 @@ test("pi：半截报错自动重试从断点继续（保留已生成前半截、
 				seenContexts.push(ctx);
 				return fauxAssistantMessage("她推窗望向山道。");
 			},
+			fauxScribeEmpty(),
 		] as never);
 
 		await engine.performTurn("推窗。");

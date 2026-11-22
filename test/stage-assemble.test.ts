@@ -161,6 +161,8 @@ test("stateFromBranch：最近快照生效；无快照=初始", () => {
 		{ type: "custom", customType: "rp-state", data: { scene: "新场景" } },
 	];
 	assert.equal((stateFromBranch(branch) as { scene?: string }).scene, "新场景");
+	const checkpoint = stateFromBranch([{ type: "custom", customType: "rp-state", data: { scene: "已补记", __scribeBeatId: "beat-2" } }]);
+	assert.equal((checkpoint as { __scribeBeatId?: string }).__scribeBeatId, undefined, "游标元数据不得泄漏进世界状态");
 	assert.deepEqual(stateFromBranch([userE("嗨")]), defaultState());
 });
 

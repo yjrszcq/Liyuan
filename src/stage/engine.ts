@@ -994,6 +994,7 @@ export class StageEngine {
 		ev.onTurnStart?.();
 		let endInfo: StageTurnEndInfo = { aborted: false };
 		try {
+			if (this.#turnMode === "roleplay") await this.#recoverPendingScribes();
 			endInfo = await this.#turn(userText, directorNote);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -1531,7 +1532,9 @@ export class StageEngine {
 					charName: card.name,
 					userName: config.userName,
 				});
-				await this.#scribe({ model, auth: { apiKey, headers }, materials, sm, ev, state, userText: lastUserText, assistantText: cleanForScribe });
+				sm.appendCustomEntry("rp-scribe-pending", { beatId: entryId, userText: lastUserText, assistantText: cleanForScribe });
+				sm.flush();
+				await this.#scribe({ model, auth: { apiKey, headers }, materials, sm, ev, state, userText: lastUserText, assistantText: cleanForScribe, beatId: entryId });
 			}
 			this.#pendingPanelData = {};
 
@@ -1957,8 +1960,8 @@ export class StageEngine {
 	 */
 	async #scribe(o: {
 		model: StageModelLike; auth: { apiKey?: string; headers?: Record<string, string | null> }; materials: StageMaterials;
-		sm: StageSessionManager; ev: StageEvents; state: WorldState; userText: string; assistantText: string;
-	}): Promise<void> {
+		sm: StageSessionManager; ev: StageEvents; state: WorldState; userText: string; assistantText: string; beatId?: string;
+	}): Promise<"complete" | "pending"> {
 		const { model, auth, materials, sm, ev, state } = o;
 		// MVU 卡：开演前若树还没建（首拍/老会话），从卡的初值声明懒建——世界书 [initvar] 优先，
 		// 没有就退到卡自带脚本里 Zod schema 的 prefault（见 seedMvuIfNeeded）。规则喂给场记当参考。
@@ -1985,10 +1988,14 @@ export class StageEngine {
 					),
 				}
 			: seededState;
+		const appendCheckpoint = (next: WorldState) => {
+			if (o.beatId) sm.appendCustomEntry(STATE_ENTRY_TYPE, { ...next, __scribeBeatId: o.beatId });
+			else sm.appendCustomEntry(STATE_ENTRY_TYPE, next);
+		};
 		const r = await runScribeTurn(
 			{
 				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, "scribe"),
-				appendStateEntry: (s) => sm.appendCustomEntry(STATE_ENTRY_TYPE, s),
+				appendStateEntry: appendCheckpoint,
 				getLeafId: () => sm.getLeafId(),
 				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
 				onActivity: (d) => ev.onActivity?.(d),
@@ -2004,8 +2011,10 @@ export class StageEngine {
 		);
 		if (r.kind === "failed") {
 			console.error(`[stage-scribe] 记账跳过：${r.error}`);
-			if (!this.#abort?.signal.aborted) ev.onNotify?.("warning", `记账失败：${r.error}`);
+			ev.onNotify?.("warning", `记账失败：${r.error}`);
+			return "pending";
 		}
+		if (r.kind === "skipped" && o.beatId) sm.appendCustomEntry("rp-scribe-complete", { beatId: o.beatId });
 		/**
 		 * 场记这拍没落账（无变化/解析失败/切了分支），新声明的面板数据就没人写下来——
 		 * 而 panel_write 不会再调一次，那棵树会永久丢失、面板永远显示不出值。所以补一笔。
@@ -2021,6 +2030,80 @@ export class StageEngine {
 			}
 		}
 		sm.flush();
+		return r.kind === "stale" ? "pending" : "complete";
+	}
+
+	async #recoverPendingScribes(): Promise<void> {
+		const sm = this.#deps.getSession().sessionManager;
+		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]);
+		const stateEntries = branch.flatMap((e, index) =>
+			e.type === "custom" && e.customType === STATE_ENTRY_TYPE ? [{ e, index }] : [],
+		);
+		const completed = new Set(
+			branch
+				.filter((e) => e.type === "custom" && (e.customType === STATE_ENTRY_TYPE || e.customType === "rp-scribe-complete"))
+				.map((e) =>
+					e.customType === STATE_ENTRY_TYPE
+						? (e.data as { __scribeBeatId?: unknown } | undefined)?.__scribeBeatId
+						: (e.data as { beatId?: unknown } | undefined)?.beatId,
+				)
+				.filter((id): id is string => typeof id === "string"),
+		);
+		const pending = branch
+			.filter((e) => e.type === "custom" && e.customType === "rp-scribe-pending" && e.data && typeof e.data === "object")
+			.map((e) => e.data as { beatId?: unknown; userText?: unknown; assistantText?: unknown })
+			.filter(
+				(d): d is { beatId: string; userText: string; assistantText: string } =>
+					typeof d.beatId === "string" &&
+					typeof d.userText === "string" &&
+					typeof d.assistantText === "string" &&
+					!completed.has(d.beatId),
+			);
+		if (stateEntries.length) {
+			const lastSnapshot = stateEntries.at(-1)!.index;
+			const pendingIds = new Set(pending.map((d) => d.beatId));
+			const materials = loadStageMaterials(this.#deps.cwd);
+			for (const beat of completedStoryBeats(branch).slice(-12)) {
+				if (beat.end <= lastSnapshot) continue;
+				const user = branch[beat.start];
+				const assistant = branch[beat.end];
+				if (!user?.id || !assistant?.id || completed.has(assistant.id) || pendingIds.has(assistant.id)) continue;
+				const data = {
+					beatId: assistant.id,
+					userText: contextText(user.message?.content),
+					assistantText: prepareScribeAssistantText(
+						contextText(assistant.message?.content),
+						materials.promptRules,
+						{ charName: materials.card.name, userName: materials.config.userName },
+					),
+				};
+				if (!data.assistantText.trim()) continue;
+				sm.appendCustomEntry("rp-scribe-pending", data);
+				pending.push(data);
+				pendingIds.add(data.beatId);
+			}
+			sm.flush();
+		}
+		if (!pending.length) return;
+		const model = this.#deps.getModel();
+		if (!model) throw new Error("待补记账未完成：请先配置剧情模型后重试。");
+		const materials = loadStageMaterials(this.#deps.cwd);
+		const auth = await this.#deps.getAuth(model);
+		for (const beat of pending) {
+			const state = stateFromBranch(sm.getBranch() as BranchEntryLike[]);
+			const outcome = await this.#scribe({
+				model,
+				auth,
+				materials,
+				sm,
+				ev: this.#deps.events ?? {},
+				state,
+				userText: beat.userText,
+				assistantText: beat.assistantText,
+				beatId: beat.beatId,
+			});
+			if (outcome !== "complete") throw new Error("前一拍状态仍未同步。剧情尚未继续；请检查旁路模型后重试。");
+		}
 	}
 
 	/**
