@@ -993,6 +993,7 @@ const helloFrame = (): ServerFrame => {
 		charName: names.charName,
 		userName: names.userName,
 		messages: annotateSwipes(toWireHistory(branchMessages(), names, { skin })),
+		pendingScribes: stage?.pendingScribeCount() ?? 0,
 		state: currentState(),
 		stats: safeStats(),
 		panels: currentPanels(),
@@ -1820,6 +1821,7 @@ const restHost: RestHost = {
 	cwd,
 	isStreaming: () => session.isStreaming || stage.isStreaming,
 	refreshState: (requestId) => stage.refreshState(requestId ? (stageName) => broadcast({ type: "state_refresh", requestId, stage: stageName }) : undefined),
+	retryPendingScribes: () => stage.retryPendingScribes(),
 	settleCardPreview: (report) => cardPreviews.settle(report),
 	settleScreenshot: (report) => screenshots.settle(report),
 	runCardPreview: (args) => {
@@ -2978,6 +2980,7 @@ stage = new StageEngine({
 		onReplyRevised: () => resyncAll(),
 		onStreamClear: () => broadcast({ type: "stream", state: "clear" }),
 		onNotify: (level, text) => { cli?.out(`[${level}] ${text}`); broadcast({ type: "notify", level, text }); },
+		onPendingScribes: (count) => broadcast({ type: "scribe_pending", count }),
 		onActivity: (detail) => {
 			cli?.out(`[activity] ${detail}`);
 			broadcast({ type: "activity", activity: { kind: "note", name: "stage", detail } });

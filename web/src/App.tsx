@@ -370,6 +370,8 @@ export default function App() {
 	const [stateRefreshing, setStateRefreshing] = useState(false);
 	const [stateRefreshStage, setStateRefreshStage] = useState<StateRefreshStage | null>(null);
 	const stateRefreshRequestIdRef = useRef<string | null>(null);
+	const [pendingScribeCount, setPendingScribeCount] = useState(0);
+	const [retryingScribes, setRetryingScribes] = useState(false);
 	const [stats, setStats] = useState<WireStats | null>(null);
 	const [warnings, setWarnings] = useState<WarnEntry[]>([]);
 	const [bellOpen, setBellOpen] = useState(false);
@@ -859,6 +861,19 @@ export default function App() {
 			}
 		}
 	}, [pushToast]);
+	const retryPendingScribes = useCallback(async () => {
+		if (retryingScribes) return;
+		setRetryingScribes(true);
+		try {
+			const result = await apiPost<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }>("/api/state/retry-scribes", {});
+			setPendingScribeCount(result.pendingCount);
+			if (result.message) pushToast(result.kind === "failed" ? "warning" : "info", result.message);
+		} catch (error) {
+			pushToast("error", error instanceof Error ? error.message : String(error));
+		} finally {
+			setRetryingScribes(false);
+		}
+	}, [pushToast, retryingScribes]);
 
 	/**
 	 * agent 模式的稿子：hello 只带目录，正文按「目录指纹」变化才拉一次 GET /api/story（gzip）。
@@ -1142,6 +1157,7 @@ export default function App() {
 					if (!sameSession) setMsgEdit(null);
 					if (keepComposerFocus) requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
 					setWorldState(frame.state);
+					setPendingScribeCount(frame.pendingScribes ?? 0);
 					setStats(frame.stats);
 					// 一档皮肤:优先用 hello 同帧载荷(与消息同步),杜绝 REST 缓存/时序导致的漏皮
 					if (frame.cardfront) {
@@ -1408,6 +1424,9 @@ export default function App() {
 					break;
 				case "state_refresh":
 					if (stateRefreshRequestIdRef.current === frame.requestId) setStateRefreshStage(frame.stage);
+					break;
+				case "scribe_pending":
+					setPendingScribeCount(frame.count);
 					break;
 				case "state":
 					setWorldState(frame.state);
@@ -2319,7 +2338,7 @@ export default function App() {
 			case "roster":
 				return <RosterPanel state={worldState} toast={pushToast} />;
 			case "status":
-				return <StatusPanel state={worldState} toast={pushToast} />;
+				return <StatusPanel state={worldState} toast={pushToast} pendingScribeCount={pendingScribeCount} retryingScribes={retryingScribes} onRetryPendingScribes={() => void retryPendingScribes()} />;
 			case "uploads":
 				return (
 					<UploadsPanel

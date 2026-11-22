@@ -51,6 +51,9 @@ export const sessions: Record<string, string> = {
 	"保存": "Save",
 	// 会话面板
 	"刷新状态": "Refresh status",
+	"有 {n} 拍记账待补": "{n} ledger entries need retry",
+	"重新记账": "Retry bookkeeping",
+	"正在重新记账…": "Retrying bookkeeping…",
 	"正在刷新…": "Refreshing…",
 	"状态刷新阶段": "Status refresh stages",
 	"准备剧情": "Preparing story",

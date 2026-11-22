@@ -302,6 +302,7 @@ export type ServerFrame =
 			userName: string;
 			messages: WireMsg[];
 			workspace?: DraftView;
+			pendingScribes?: number;
 			streaming?: boolean;
 			state: WorldState | null;
 			stats: WireStats | null;
@@ -346,6 +347,7 @@ export type ServerFrame =
 	| { type: "agent"; state: "start" | "end" }
 	| { type: "activity"; activity: WireActivity }
 	| { type: "state_refresh"; requestId: string; stage: StateRefreshStage }
+	| { type: "scribe_pending"; count: number }
 	| { type: "state"; state: WorldState }
 	/** agent 自建面板变化（panel_write/close 落盘、rewind 回退）：活跃面板全量推送（同 state 的 fs.watch 机制） */
 	| { type: "panels"; panels: RpPanel[] }

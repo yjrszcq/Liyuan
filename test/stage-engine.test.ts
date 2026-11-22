@@ -634,6 +634,42 @@ test("场记：完整 JSON 形状的截断回答不覆盖已知状态，并通�
 	}
 });
 
+test("场记：可在不生成新剧情的情况下显式重试待补拍", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const pendingCounts: number[] = [];
+		reg.setResponses([
+			fauxAssistantMessage("天色渐晚。"),
+			fauxAssistantMessage("not JSON"),
+			fauxAssistantMessage("still not JSON"),
+			fauxAssistantMessage('{"patch":{"time":"黄昏"}}'),
+		]);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {
+			onPendingScribes: (count) => pendingCounts.push(count),
+		});
+		await engine.performTurn("等一会。");
+		assert.equal(engine.pendingScribeCount(), 1);
+		const messagesBeforeRetry = sm.getBranch().filter((e) => e.type === "message").length;
+
+		const failed = await engine.retryPendingScribes();
+		assert.equal(failed.kind, "failed");
+		assert.equal(failed.pendingCount, 1);
+		assert.equal(engine.pendingScribeCount(), 1, "重试失败后待补拍仍应可重试");
+		const result = await engine.retryPendingScribes();
+		assert.equal(result.kind, "applied");
+		assert.equal(result.pendingCount, 0);
+		assert.equal(engine.pendingScribeCount(), 0);
+		assert.equal(sm.getBranch().filter((e) => e.type === "message").length, messagesBeforeRetry, "重试不能生成剧情消息");
+		const snapshots = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state");
+		assert.equal(snapshots.at(-1)?.data.time, "黄昏");
+		assert.deepEqual(pendingCounts, [1, 1, 0]);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("场记：待补拍的空补丁也推进分支完成标记", async () => {
 	const { cwd, sm } = makeStage();
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });

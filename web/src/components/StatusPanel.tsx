@@ -14,9 +14,12 @@ import { t } from "../i18n/index.ts";
 export interface StatusPanelProps {
 	state: WorldState | null;
 	toast: (level: "info" | "warning" | "error", text: string) => void;
+	pendingScribeCount: number;
+	retryingScribes: boolean;
+	onRetryPendingScribes: () => void;
 }
 
-export function StatusPanel({ state, toast }: StatusPanelProps) {
+export function StatusPanel({ state, toast, pendingScribeCount, retryingScribes, onRetryPendingScribes }: StatusPanelProps) {
 	const { run } = useAction(toast);
 
 	const patch = (p: Record<string, unknown>) =>
@@ -38,6 +41,14 @@ export function StatusPanel({ state, toast }: StatusPanelProps) {
 
 	return (
 		<div className="status-panel">
+			{pendingScribeCount > 0 && (
+				<div className="sp-pending-scribe" role="status" aria-live="polite">
+					<span>{t("有 {n} 拍记账待补", { n: pendingScribeCount })}</span>
+					<button type="button" className="drawer-btn primary" disabled={retryingScribes} aria-busy={retryingScribes} onClick={onRetryPendingScribes}>
+						{retryingScribes ? t("正在重新记账…") : t("重新记账")}
+					</button>
+				</div>
+			)}
 			{empty && (
 				<div className="sp-empty-banner">
 					{t("随剧情展开，时间、地点、登场人物与随身行囊将由场记自动登记入册。")}

@@ -213,6 +213,7 @@ interface StageEvents {
 	onTurnEnd?: (info: StageTurnEndInfo) => void;
 	/** 面向用户的告警（宏降级等）；每种只发一次 */
 	onNotify?: (level: "info" | "warning" | "error", text: string) => void;
+	onPendingScribes?: (count: number) => void;
 	/** 过程条短句（验收/修订进度；kind:"note" 形态，无需工具名） */
 	onActivity?: (detail: string) => void;
 	/**
@@ -615,6 +616,38 @@ export const mergeFinalText = (draft: string, text: string): string => {
 	return dedupeIdenticalBlocks([d, tailPart].filter(Boolean).join("\n\n"));
 };
 
+interface PendingScribe {
+	beatId: string;
+	userText: string;
+	assistantText: string;
+}
+
+const completedScribeBeatIdsFromBranch = (branch: BranchEntryLike[]): Set<string> =>
+	new Set(
+		branch
+			.filter((e) => e.type === "custom" && (e.customType === STATE_ENTRY_TYPE || e.customType === "rp-scribe-complete"))
+			.map((e) =>
+				e.customType === STATE_ENTRY_TYPE
+					? (e.data as { __scribeBeatId?: unknown } | undefined)?.__scribeBeatId
+					: (e.data as { beatId?: unknown } | undefined)?.beatId,
+			)
+			.filter((id): id is string => typeof id === "string"),
+	);
+
+const pendingScribesFromBranch = (branch: BranchEntryLike[]): PendingScribe[] => {
+	const completed = completedScribeBeatIdsFromBranch(branch);
+	return branch
+		.filter((e) => e.type === "custom" && e.customType === "rp-scribe-pending" && e.data && typeof e.data === "object")
+		.map((e) => e.data as { beatId?: unknown; userText?: unknown; assistantText?: unknown })
+		.filter(
+			(d): d is PendingScribe =>
+				typeof d.beatId === "string" &&
+				typeof d.userText === "string" &&
+				typeof d.assistantText === "string" &&
+				!completed.has(d.beatId),
+		);
+};
+
 export class StageEngine {
 	#deps: StageEngineDeps;
 	#busy = false;
@@ -690,6 +723,11 @@ export class StageEngine {
 		return tree === "authoring" ? "roleplay" : tree;
 	}
 	get turnMode(): ConversationMode | undefined { return this.#turnMode; }
+	pendingScribeCount(): number {
+		const sm = this.#deps.getSession().sessionManager;
+		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];
+		return pendingScribesFromBranch(branch).length;
+	}
 
 	getWorkspaces(): TurnWorkspace[] {
 		const sm = this.#deps.getSession().sessionManager;
@@ -820,6 +858,24 @@ export class StageEngine {
 	abort(): void {
 		this.#abort?.abort();
 		void this.#deps.getSession().abort();
+	}
+	async retryPendingScribes(): Promise<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }> {
+		const pendingCount = this.pendingScribeCount();
+		if (this.#busy || this.#refreshing) return { kind: "skipped", message: "当前有生成或记账任务。", pendingCount };
+		if (!pendingCount) return { kind: "skipped", message: "当前没有待补记账。", pendingCount };
+		this.#busy = true;
+		try {
+			await this.#recoverPendingScribes(false);
+			return { kind: "applied", message: "待补记账已完成。", pendingCount: this.pendingScribeCount() };
+		} catch (error) {
+			return {
+				kind: "failed",
+				message: error instanceof Error ? error.message : String(error),
+				pendingCount: this.pendingScribeCount(),
+			};
+		} finally {
+			this.#busy = false;
+		}
 	}
 
 	/** Reconcile the current ledger against recent completed story on this branch. */
@@ -2014,6 +2070,7 @@ export class StageEngine {
 		if (r.kind === "failed") {
 			console.error(`[stage-scribe] 记账跳过：${r.error}`);
 			ev.onNotify?.("warning", `记账失败：${r.error}`);
+			ev.onPendingScribes?.(this.pendingScribeCount());
 			return "pending";
 		}
 		if (r.kind === "skipped" && o.beatId) sm.appendCustomEntry("rp-scribe-complete", { beatId: o.beatId });
@@ -2032,36 +2089,19 @@ export class StageEngine {
 			}
 		}
 		sm.flush();
+		ev.onPendingScribes?.(this.pendingScribeCount());
 		return r.kind === "stale" ? "pending" : "complete";
 	}
 
-	async #recoverPendingScribes(): Promise<void> {
+	async #recoverPendingScribes(discoverMissing = true): Promise<void> {
 		const sm = this.#deps.getSession().sessionManager;
 		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]);
 		const stateEntries = branch.flatMap((e, index) =>
 			e.type === "custom" && e.customType === STATE_ENTRY_TYPE ? [{ e, index }] : [],
 		);
-		const completed = new Set(
-			branch
-				.filter((e) => e.type === "custom" && (e.customType === STATE_ENTRY_TYPE || e.customType === "rp-scribe-complete"))
-				.map((e) =>
-					e.customType === STATE_ENTRY_TYPE
-						? (e.data as { __scribeBeatId?: unknown } | undefined)?.__scribeBeatId
-						: (e.data as { beatId?: unknown } | undefined)?.beatId,
-				)
-				.filter((id): id is string => typeof id === "string"),
-		);
-		const pending = branch
-			.filter((e) => e.type === "custom" && e.customType === "rp-scribe-pending" && e.data && typeof e.data === "object")
-			.map((e) => e.data as { beatId?: unknown; userText?: unknown; assistantText?: unknown })
-			.filter(
-				(d): d is { beatId: string; userText: string; assistantText: string } =>
-					typeof d.beatId === "string" &&
-					typeof d.userText === "string" &&
-					typeof d.assistantText === "string" &&
-					!completed.has(d.beatId),
-			);
-		if (stateEntries.length) {
+		const pending = pendingScribesFromBranch(branch);
+		const completed = completedScribeBeatIdsFromBranch(branch);
+		if (discoverMissing && stateEntries.length) {
 			const lastSnapshot = stateEntries.at(-1)!.index;
 			const pendingIds = new Set(pending.map((d) => d.beatId));
 			const materials = loadStageMaterials(this.#deps.cwd);
@@ -2085,6 +2125,7 @@ export class StageEngine {
 				pendingIds.add(data.beatId);
 			}
 			sm.flush();
+			this.#deps.events?.onPendingScribes?.(this.pendingScribeCount());
 		}
 		if (!pending.length) return;
 		const model = this.#deps.getModel();

@@ -321,6 +321,7 @@ export interface RestHost {
 	/** 世界状态用户主权编辑（applyPatch 语义，落盘+ await statesync） */
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
 	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
+	retryPendingScribes(): Promise<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }>;
 	notify(level: "info" | "warning" | "error", text: string): void;
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
@@ -3424,6 +3425,12 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				if (refuseWhileStreaming()) return true;
 				const requestId = query.get("requestId");
 				const result = await host.refreshState(requestId && requestId.length <= 128 ? requestId : undefined);
+				sendJson(res, 200, result);
+				return true;
+			}
+			case "POST /api/state/retry-scribes": {
+				if (refuseWhileStreaming()) return true;
+				const result = await host.retryPendingScribes();
 				sendJson(res, 200, result);
 				return true;
 			}
