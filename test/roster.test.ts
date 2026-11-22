@@ -35,16 +35,47 @@ test("名录送模索引限定长度并标记省略历史条目", () => {
 	assert.ok(index.includes("Event 59"));
 	assert.ok(!index.includes("Event 0"));
 });
-test("名录容量：剧情线超上限丢最旧", () => {
-	let s = defaultState();
-	for (let i = 0; i < 70; i++) {
-		s = applyPatch(s, { plot_threads: [`线索${i}`] }).state;
-	}
-	const events = Object.keys(s.roster?.events ?? {});
-	assert.equal(events.length, 60);
-	assert.ok(!events.includes("线索0"));
-	assert.ok(events.includes("线索69"));
+
+test("名录容量：人物、物品、事件和地点各自保留最新上限", () => {
+	let state = defaultState();
+	const characters = Object.fromEntries(Array.from({ length: 110 }, (_, i) => [`角色${i}`, { affinity: 0, status: "", notes: "" }]));
+	state = applyPatch(state, { characters }).state;
+	const characterNames = Object.keys(state.roster?.characters ?? {});
+	assert.equal(characterNames.length, 100);
+	assert.ok(!characterNames.includes("角色0"));
+	assert.ok(characterNames.includes("角色109"));
+
+	state = applyPatch(state, { inventory: Array.from({ length: 110 }, (_, i) => `物品${i}`) }).state;
+	const itemNames = Object.keys(state.roster?.items ?? {});
+	assert.equal(itemNames.length, 100);
+	assert.ok(!itemNames.includes("物品0"));
+	assert.ok(itemNames.includes("物品109"));
+
+	state = applyPatch(state, { plot_threads: Array.from({ length: 70 }, (_, i) => `线索${i}`) }).state;
+	const eventNames = Object.keys(state.roster?.events ?? {});
+	assert.equal(eventNames.length, 60);
+	assert.ok(!eventNames.includes("线索0"));
+	assert.ok(eventNames.includes("线索69"));
+
+	for (let i = 0; i < 70; i++) state = applyPatch(state, { location: `地点${i}` }).state;
+	const places = Object.keys(state.roster?.places ?? {});
+	assert.equal(places.length, 60);
+	assert.ok(!places.includes("地点0"));
+	assert.ok(places.includes("地点69"));
 });
+
+test("角色在本轮重新记为当前地点后恢复在场状态", () => {
+	const departed = applyPatch(defaultState(), {
+		location: "君临",
+		characters: { Daenerys: { at: "临冬城" } },
+	}).state;
+	assert.match(formatState(departed), /Daenerys：.*在：临冬城/);
+
+	const returned = applyPatch(departed, { characters: { Daenerys: { at: "君临" } } }).state;
+	assert.equal(returned.characters.Daenerys?.at, returned.location);
+	assert.match(formatState(returned), /Daenerys：.*在场/);
+});
+
 
 test("名录一句话超长截断", () => {
 	const r = applyPatch(defaultState(), { characters: { 龙王: { status: "一".repeat(80) } } });

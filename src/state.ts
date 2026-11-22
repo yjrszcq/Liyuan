@@ -186,7 +186,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 			case "roster": {
 				// 登场名录编辑（用户主权，REST 侧用；模型工具 schema 不含此键）：
 				// {characters/places/items/events: {名称: null(删除) | 字符串(改登场时间)}}。
-				// 注意：删除**活跃**条目会被本函数末尾的 registerRoster 立即重新登记——名录必须覆盖在场条目。
+				// 删除离场条目保持删除；自动登记只补当前活跃项与本次明确更新的实体。
 				if (value && typeof value === "object" && !Array.isArray(value)) {
 					const roster: StateRoster = next.roster ?? { characters: {}, items: {}, events: {} };
 					if (!roster.places) roster.places = {};
