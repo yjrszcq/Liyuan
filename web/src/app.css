@@ -1592,6 +1592,13 @@ html[data-theme="dark"] [data-tip]:focus-visible::after {
 	flex: none;
 }
 
+.stage-col-head-main {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
 .stage-col-title {
 	display: inline-flex;
 	align-items: center;
@@ -6531,10 +6538,11 @@ input.panel-search.num {
 
 /* ── 戏境状态栏面板（右侧分栏）：桌面端平立展开 ── */
 .status-panel {
-	flex: 0 0 auto;
-	min-height: max-content;
+	flex: 1 1 0;
+	min-height: 0;
+	max-height: 100%;
 	background: transparent;
-	overflow: visible;
+	overflow-y: auto;
 }
 .sp-empty-banner {
 	font-size: 12px;

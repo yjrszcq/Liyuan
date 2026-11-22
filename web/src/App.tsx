@@ -364,6 +364,7 @@ export default function App() {
 	const [chats, setChats] = useState<WireChatInfo[] | null>(null);
 	// 右栏数据
 	const [worldState, setWorldState] = useState<WorldState | null>(null);
+	const [stateRefreshing, setStateRefreshing] = useState(false);
 	const [stats, setStats] = useState<WireStats | null>(null);
 	const [warnings, setWarnings] = useState<WarnEntry[]>([]);
 	const [bellOpen, setBellOpen] = useState(false);
@@ -835,6 +836,17 @@ export default function App() {
 			setToasts((ts) => ts.filter((t) => t.id !== id));
 		}, TOAST_TTL_MS[level]);
 	}, []);
+	const refreshWorldState = useCallback(async () => {
+		setStateRefreshing(true);
+		try {
+			const result = await apiPost<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>("/api/state/refresh", {});
+			if (result.message) pushToast(result.kind === "failed" || result.kind === "stale" ? "warning" : "info", result.message);
+		} catch (error) {
+			pushToast("error", error instanceof Error ? error.message : String(error));
+		} finally {
+			setStateRefreshing(false);
+		}
+	}, [pushToast]);
 
 	/**
 	 * agent 模式的稿子：hello 只带目录，正文按「目录指纹」变化才拉一次 GET /api/story（gzip）。
@@ -3726,19 +3738,33 @@ export default function App() {
 						const pane = (
 							<aside className="stage-col stage-col-right" aria-label={panelLabel(rightPanel) || t("状态栏")}>
 								<div className="stage-col-head">
-									<span className="stage-col-title">
-										{(() => {
-											const isAg = rightPanel.startsWith("agent:");
-											const ag = isAg ? agentPanels.find((p) => agentId(p.name) === rightPanel) : undefined;
-											const Icon = ag ? IconDock : PANEL_ICON[rightPanel as PanelId] || IconStatus;
-											return (
-												<>
-													<Icon size={14} />
-													<span>{ag ? ag.name : panelLabel(rightPanel) || t("状态栏")}</span>
-												</>
-											);
-										})()}
-									</span>
+									<div className="stage-col-head-main">
+										<span className="stage-col-title">
+											{(() => {
+												const isAg = rightPanel.startsWith("agent:");
+												const ag = isAg ? agentPanels.find((p) => agentId(p.name) === rightPanel) : undefined;
+												const Icon = ag ? IconDock : PANEL_ICON[rightPanel as PanelId] || IconStatus;
+												return (
+													<>
+														<Icon size={14} />
+														<span>{ag ? ag.name : panelLabel(rightPanel) || t("状态栏")}</span>
+													</>
+												);
+											})()}
+										</span>
+										{rightPanel === "status" && (
+											<button
+												type="button"
+												className="icon-btn"
+												disabled={stateRefreshing}
+												onClick={() => void refreshWorldState()}
+												title={t("刷新状态")}
+												aria-label={t("刷新状态")}
+											>
+												<IconRefresh size={15} />
+											</button>
+										)}
+									</div>
 									<button
 										type="button"
 										className="icon-btn"

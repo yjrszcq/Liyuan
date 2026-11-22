@@ -4,7 +4,7 @@
  * 杜绝细碎气泡与悬浮框，采用优雅的文人长卷章节排版。
  */
 
-import { api, apiPut, type StatePatchResult } from "../api.ts";
+import { apiPut, type StatePatchResult } from "../api.ts";
 import type { WorldState } from "../wire.ts";
 import { IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
@@ -17,11 +17,7 @@ export interface StatusPanelProps {
 }
 
 export function StatusPanel({ state, toast }: StatusPanelProps) {
-	const { busy, run } = useAction(toast);
-	const refresh = () => run(async () => {
-		const result = await api<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>("/api/state/refresh", { method: "POST", body: "{}" });
-		if (result.message) toast(result.kind === "failed" || result.kind === "stale" ? "warning" : "info", result.message);
-	});
+	const { run } = useAction(toast);
 
 	const patch = (p: Record<string, unknown>) =>
 		run(async () => {
@@ -42,9 +38,6 @@ export function StatusPanel({ state, toast }: StatusPanelProps) {
 
 	return (
 		<div className="status-panel">
-			<div className="sp-section-head">
-				<button type="button" className="act" disabled={busy} onClick={() => void refresh()} title={t("按当前剧情对账状态；不会再次增加好感")}>{busy ? t("正在刷新…") : t("刷新状态")}</button>
-			</div>
 			{empty && (
 				<div className="sp-empty-banner">
 					{t("随剧情展开，时间、地点、登场人物与随身行囊将由场记自动登记入册。")}
