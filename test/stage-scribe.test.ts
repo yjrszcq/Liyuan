@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { runScribeTurn, type ScribeRunDeps } from "../src/stage/scribe-run.ts";
-import { defaultState } from "../src/state.ts";
+import { buildScribeTurnPrompt } from "../src/scribe.ts";
+import { applyPatch, defaultState } from "../src/state.ts";
 import type { WorldState } from "../src/types.ts";
 
 const baseInput = {
@@ -74,7 +75,7 @@ test("场记：叶守卫——调用期间分支变了则整体丢弃（R9）", 
 
 	assert.equal(r.kind, "stale");
 	assert.equal(deps.entries.length, 0, "废弃分支的账本绝不落树");
-	assert.ok(deps.activities.some((a) => a.includes("切换了分支")));
+	assert.ok(deps.activities.some((a) => a.includes("分支或状态")));
 });
 
 test("场记：空 patch / 不可解析 / 调用失败都不落树", async () => {
@@ -118,4 +119,31 @@ test("场记：快照带登场名录（applyPatch 咽喉点自动登记）", asy
 	const roster = deps.entries[0].roster;
 	assert.ok(roster?.characters["老松道人"] !== undefined, "人物进名录");
 	assert.ok(roster?.events["寻回师门信物"] !== undefined, "剧情线进名录");
+});
+
+test("手动对账使用绝对好感度，重复结果不追加快照", async () => {
+	const state = applyPatch(defaultState(), { characters: { 云澜: { affinity: 7 } } }).state;
+	const deps = makeDeps(JSON.stringify({ patch: { characters: { 云澜: { affinity: 7 } } } }), { getState: () => state });
+	const first = await runScribeTurn(deps, { ...baseInput, state, reconcile: true });
+	assert.equal(first.kind, "skipped");
+	assert.equal(deps.entries.length, 0);
+	assert.ok(deps.prompts.length === 1);
+	const prompt = buildScribeTurnPrompt({ ...baseInput, state, reconcile: true });
+	assert.match(prompt.systemPrompt, /输出当前绝对值，不做增量加减/);
+	assert.doesNotMatch(prompt.systemPrompt, /通常 ±1~10/);
+});
+
+test("手动对账期间用户修改账本时丢弃模型结果", async () => {
+	const state = defaultState();
+	let current = state;
+	const deps = makeDeps(JSON.stringify({ patch: { location: "月门" } }), {
+		getState: () => current,
+		sideText: async () => {
+			current = { ...state, location: "藏经阁" };
+			return JSON.stringify({ patch: { location: "月门" } });
+		},
+	});
+	const result = await runScribeTurn(deps, { ...baseInput, state, reconcile: true });
+	assert.equal(result.kind, "stale");
+	assert.equal(deps.entries.length, 0);
 });

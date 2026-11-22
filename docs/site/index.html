@@ -754,8 +754,8 @@ npm run web          # 启动服务，浏览器打开 http://127.0.0.1:7620</cod
                 <div class="screen-card-title">长文防爆与防漂移机制</div>
                 <ul class="keypoints-list">
                   <li class="keypoint-item">
-                    <strong>固定楼层压缩周期 (建议 20~30 轮)</strong>
-                    每满周期自动将早期正文提炼为接力摘要，原文归档入库，保持窗口轻量。
+                    <strong>剧情自动压缩周期（建议 20~30 拍）</strong>
+                    扮演每满周期压缩早期正文，保留最近 6 拍。摘要跟随剧情语言，不依赖向量记忆。
                   </li>
                   <li class="keypoint-item">
                     <strong>关键词扫描深度 (建议 4 轮)</strong>
@@ -824,7 +824,7 @@ npm run web          # 启动服务，浏览器打开 http://127.0.0.1:7620</cod
             <details class="faq-item">
               <summary class="faq-summary">Q5：旁路模型（Side Model）用于记账为什么必须关闭思考？</summary>
               <div class="faq-content">
-                旁路模型用于在每轮末尾异步更新变量账本与人物名录。记账属于快速结构化提炼，必须将思考档设为 <code>off</code>。若开启思考，每轮末尾可能需要额外等待几十秒甚至几分钟，极大拖慢推演节奏。
+                旁路模型用于在每轮末尾异步更新变量账本与人物名录。记账属于快速结构化提炼，必须将思考档设为 <code>off</code>。若开启思考，每轮末尾可能需要额外等待几十秒甚至几分钟，极大拖慢推演节奏。状态栏也可按当前分支最近 12 个完成剧情拍手动对账；对账使用绝对状态，不会重复叠加相对好感变化。模型名录索引只带近期条目，省略历史不代表新登场；侧栏仍保留完整名录。
               </div>
             </details>
 

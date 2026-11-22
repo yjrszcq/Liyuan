@@ -110,13 +110,20 @@ test("无摘要的分支：summary 为 undefined，历史照旧全在", () => {
 
 // ---------------- 判定：切点与门槛 ----------------
 
-test("planCompaction：未攒够拍数不压缩", () => {
-	const plan = planCompaction(beats(KEEP_RECENT_BEATS + 1), {
-		everyNTurns: 3,
-		userName: "沈舟",
-		charName: "云澜",
-	});
-	assert.equal(plan, null, "保留 6 拍 + 周期 3 = 至少 9 拍才压");
+test("planCompaction：间隔 30 从第 30 个完成拍触发，并保留 6 拍", () => {
+	const opts = { everyNTurns: 30, userName: "沈舟", charName: "云澜" };
+	assert.equal(planCompaction(beats(29, 1), opts), null);
+	assert.equal(planCompaction(beats(30, 1), opts)?.coversThroughId, "a-24");
+});
+
+test("planCompaction：间隔 1 在有可裁正文时立即压缩，未封笔不计拍", () => {
+	const opts = { everyNTurns: 1, userName: "沈舟", charName: "云澜" };
+	const branch = [...beats(KEEP_RECENT_BEATS, 1), userE("未封笔"), {
+		...asstE("尚未写完"), message: { role: "assistant", content: "尚未写完", stopReason: "aborted" },
+	}];
+	assert.equal(planCompaction(branch, opts), null);
+	branch.push(userE("下一拍"), asstE("新正文"));
+	assert.equal(planCompaction(branch, opts)?.coversThroughId, "a-1");
 });
 
 test("planCompaction：攒够则切在「最近 KEEP_RECENT 拍」之前", () => {
@@ -156,6 +163,8 @@ test("planCompaction：二次压缩只算「活着的」拍，并带上一份摘
 		"摘要之后的拍数没攒够就不该二次压缩",
 	);
 
+	const twoNew = beats(2).map((e, i) => ({ ...e, id: `${e.id}-short${i}` }));
+	assert.equal(planCompaction([...branch, ...twoNew], { everyNTurns: 3, userName: "沈舟", charName: "云澜" }), null);
 	// 再演 3 拍 → 活着的 9 拍，可压 3 拍
 	branch.push(...beats(3).map((e, i) => ({ ...e, id: `${e.id}-x${i}` })));
 	const plan = planCompaction(branch, { everyNTurns: 3, userName: "沈舟", charName: "云澜" });
@@ -213,7 +222,6 @@ const makeDeps = (
 const input = (branch: BranchEntryLike[], everyNTurns = 3) => ({
 	branch,
 	state: defaultState(),
-	language: "中文",
 	userName: "沈舟",
 	charName: "云澜",
 	everyNTurns,
@@ -253,6 +261,24 @@ test("runCompaction：叶守卫——调用期间切分支则整体丢弃（R9�
 	const r = await runCompaction(deps, input(beats(10)));
 	assert.equal(r.kind, "stale");
 	assert.equal(deps.appended.length, 0, "摘要绝不能落到导航后的分支上");
+});
+
+test("runCompaction：归档时切分支也不能在另一条线落摘要", async () => {
+	let leaf = "leaf-1";
+	const deps = makeDeps({ getLeafId: () => leaf, archive: async () => { leaf = "leaf-2"; } });
+	const r = await runCompaction(deps, input(beats(10)));
+	assert.equal(r.kind, "stale");
+	assert.deepEqual(deps.appended, []);
+});
+
+test("runCompaction：关闭归档时仍能保存俄语接力摘要", async () => {
+	const branch = [userE("Мы вошли в зал."), asstE("В зале горели свечи.", "ru"), ...beats(6)];
+	const deps = makeDeps({ resp: "## Предыстория\nГерои вошли в зал.", archive: async () => {} });
+	const r = await runCompaction({ ...deps, archive: undefined }, input(branch, 1));
+	assert.equal(r.kind, "compacted");
+	const { history, summary } = rebuildHistory([...branch, { ...summaryE("## Предыстория\nГерои вошли в зал.", "ru"), data: deps.appended[0] }]);
+	assert.equal(summary, "## Предыстория\nГерои вошли в зал.");
+	assert.equal(history.length, 12);
 });
 
 test("runCompaction：旁路调用失败/空摘要 → failed，正文不受影响", async () => {

@@ -21,6 +21,7 @@
 import {
 	rebuildHistory,
 	activeSummary,
+	completedStoryBeats,
 	SUMMARY_ENTRY_TYPE,
 	type BranchEntryLike,
 	type RpSummaryData,
@@ -40,7 +41,7 @@ export type { RpSummaryData };
 /** 压缩后原样保留的最近拍数（续演点必须逐字，摘要只接更早的剧情） */
 export const KEEP_RECENT_BEATS = 6;
 
-/** 可裁正文的字数地板：低于此值不值得烧一次旁路调用（自动压缩用） */
+/** 文件模式压缩的正文地板；扮演自动压缩按拍计，不设长度地板。 */
 export const MIN_COMPACT_CHARS = 2000;
 
 /**
@@ -71,7 +72,7 @@ interface PlanCompactionOptions {
 	charName: string;
 	/** 保留最近拍数（缺省 KEEP_RECENT_BEATS） */
 	keepRecentBeats?: number;
-	/** 可裁正文字数地板（缺省 MIN_COMPACT_CHARS） */
+	/** 可裁正文字数地板（扮演的手动压缩用；文件模式缺省 MIN_COMPACT_CHARS） */
 	minChars?: number;
 	/** 稿子目录（agent 模式，docs/PLAN-AGENT-CODING.md §七）：单位从「拍」换成「文件」，正文从文件读 */
 	storyDir?: string;
@@ -112,30 +113,26 @@ export function historyTokens(branch: BranchEntryLike[]): number {
 
 /**
  * 压缩判定 + 切点计算（纯函数）。
- * 触发条件：分支上「活着的」叙事拍数 ≥ 保留拍数 + 周期，且可裁正文够长。
+ * 自上次摘要写入后攒够 N 个完成的叙事拍，且有可裁正文时触发。
  * 返回 null = 本拍不压缩。
  */
 export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions): CompactPlan | null {
 	if (opts.storyDir !== undefined) return planFileCompaction(branch, opts, opts.storyDir);
 	branch = applyDraftRevisions(storyBranch(branch), { omitEditRequests: true });
 	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
-	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
+	const minChars = opts.minChars ?? 1;
 	if (!Number.isFinite(opts.everyNTurns) || opts.everyNTurns <= 0) return null;
 
 	// 已被上一份摘要覆盖的前缀不再参与
 	const active = activeSummary(branch);
 	const live = active ? branch.slice(active.cut) : branch;
 
-	// 拍的边界 = 用户消息；最近 keep 拍原样保留
-	const beatStarts: number[] = [];
-	for (let i = 0; i < live.length; i++) {
-		const e = live[i];
-		if (e.type === "message" && e.message?.role === "user") beatStarts.push(i);
-	}
-	if (beatStarts.length < keep + opts.everyNTurns) return null;
-
-	const cutAt = beatStarts[beatStarts.length - keep];
-	if (cutAt <= 0) return null;
+	// 周期从摘要写入点计；保留区从摘要覆盖点计。
+	const beats = completedStoryBeats(live);
+	const offset = active?.cut ?? 0;
+	const firstNew = beats.findIndex(({ start }) => start + offset > (active?.recordedAt ?? -1));
+	if (firstNew < 0 || beats.length - firstNew < opts.everyNTurns || beats.length <= keep) return null;
+	const cutAt = beats[beats.length - keep]?.start ?? live.length;
 	const covered = live.slice(0, cutAt);
 	const coversThroughId = covered[covered.length - 1]?.id;
 	if (!coversThroughId) return null; // 无 id 的条目（异常树）不敢下刀
@@ -147,7 +144,7 @@ export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOp
 	return {
 		coversThroughId,
 		covered,
-		turns: beatStarts.length - keep,
+		turns: beats.length - keep,
 		conversationText,
 		...(prev ? { previousSummary: prev } : {}),
 	};
@@ -216,7 +213,6 @@ export interface CompactRunDeps {
 interface CompactRunInput {
 	branch: BranchEntryLike[];
 	state: WorldState;
-	language: string;
 	userName: string;
 	charName: string;
 	everyNTurns: number;
@@ -264,7 +260,6 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		conversationText: plan.conversationText,
 		stateSnapshot: formatState(input.state),
 		previousSummary: plan.previousSummary,
-		language: input.language,
 		userName: input.userName,
 	});
 	const resp = await deps.sideText(prompt.systemPrompt, prompt.userText);
@@ -292,6 +287,10 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		} catch {
 			// 归档失败不挡压缩（只丢细节召回能力，连续性仍由摘要保底）
 		}
+	}
+	if (deps.getLeafId() !== leafBefore) {
+		deps.onCompaction?.({ state: "end", ok: false, detail: "压缩已丢弃（归档期间切换了分支）" });
+		return { kind: "stale" };
 	}
 
 	deps.appendSummaryEntry({

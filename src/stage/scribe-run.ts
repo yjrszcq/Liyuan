@@ -28,6 +28,8 @@ export interface ScribeRunDeps {
 	getLeafId: () => string | null;
 	/** 磁盘缓存路径（.liyuan-state/<sessionId>.json）；给出则落盘（server fs.watch → state 帧） */
 	stateFile?: string;
+	/** Current branch-derived state for edits made while the side call is in flight. */
+	getState?: () => WorldState;
 	onActivity?: (detail: string) => void;
 }
 
@@ -44,6 +46,7 @@ interface ScribeRunInput {
 	 * 树本身在 state.mvu；给出规则让场记判断哪些值该动。非 MVU 卡不传。
 	 */
 	mvuRules?: string;
+	reconcile?: boolean;
 }
 
 type ScribeRunOutcome =
@@ -57,7 +60,7 @@ type ScribeRunOutcome =
  * 任何失败都只跳过本拍记账，不影响正文——账本滞后一拍可由下拍补上。
  */
 export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput): Promise<ScribeRunOutcome> {
-	const { state, userText, assistantText, charName, userName, mvuRules } = input;
+	const { state, userText, assistantText, charName, userName, mvuRules, reconcile = false } = input;
 	if (!assistantText.trim()) return { kind: "skipped", reason: "no-text" };
 
 	const leafBefore = deps.getLeafId();
@@ -67,7 +70,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 	const panels = Object.entries(state.panelData ?? {})
 		.filter(([, tree]) => tree && typeof tree === "object" && Object.keys(tree).length > 0)
 		.map(([name, tree]) => ({ name, tree }));
-	const prompt = buildScribeTurnPrompt({ state, userText, assistantText, charName, userName, mvu, panels });
+	const prompt = buildScribeTurnPrompt({ state, userText, assistantText, charName, userName, mvu, panels, reconcile });
 	const resp = await deps.sideText(prompt.systemPrompt, prompt.userText);
 	if (typeof resp !== "string") return { kind: "failed", error: resp.error };
 
@@ -86,8 +89,8 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 	}
 
 	// R9 叶守卫：调用期间树动过（swipe/rewind/切线）→ 整体丢弃
-	if (deps.getLeafId() !== leafBefore) {
-		deps.onActivity?.("记账已丢弃（本拍期间切换了分支）");
+	if (deps.getLeafId() !== leafBefore || (reconcile && deps.getState && JSON.stringify(deps.getState()) !== JSON.stringify(state))) {
+		deps.onActivity?.("记账已丢弃（调用期间分支或状态发生变化）");
 		return { kind: "stale" };
 	}
 
@@ -115,6 +118,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 		}
 		result.state.panelData = next;
 	}
+	if (reconcile && JSON.stringify(result.state) === JSON.stringify(state)) return { kind: "skipped", reason: "unchanged" };
 	deps.appendStateEntry(result.state);
 	if (deps.stateFile) {
 		try {

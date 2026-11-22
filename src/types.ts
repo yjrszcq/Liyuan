@@ -183,8 +183,8 @@ export interface RpConfig {
 	/** 决策门禁档位（PLAN-PHASE4 柱 1）：ask=关键剧情决策点停笔询问用户；silent=不问，等同旧行为。默认 silent */
 	creationMode?: "ask" | "silent";
 	/**
-	 * 固定楼层压缩：每 N 个叙事轮主动压缩一次早期正文（被裁正文先完整归档进剧情库供召回）。
-	 * 0 = 关闭主动压缩，仅保留上下文吃紧时的被动压缩。缺省 30。
+	 * 扮演：每 N 个完成拍自动压缩早期正文，至少保留最近 6 拍；0 关闭自动压缩。缺省 30。
+	 * Agent 续写：保留最近 N 章，较早章节攒够字数后刷新前情；0 关闭刷新。
 	 */
 	compactEveryNTurns?: number;
 	/**

@@ -330,7 +330,7 @@ export interface RpConfigView {
 	btwPersona?: string;
 	btwPersonaTemplates?: Array<{ id: string; name: string; content: string }>;
 	btwModel?: { provider: string; entry: string };
-	/** 固定楼层压缩：每 N 个叙事轮主动压缩早期正文；0=仅被动压缩 */
+	/** 扮演自动压缩的完成拍周期／续写原样保留的最近章数；0 关闭自动压缩。 */
 	compactEveryNTurns?: number;
 	/** 旁路模型（记账/压缩）：指向连接配置里的一条模型条目；缺省=跟随剧情模型 */
 	sideModel?: { provider: string; entry: string };

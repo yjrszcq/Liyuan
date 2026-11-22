@@ -37,6 +37,7 @@ interface ScribePromptInput {
 	 * 与 mvu 是同一件事换个主人：那棵是卡的树，这些是梨园自己面板的树。
 	 */
 	panels?: Array<{ name: string; tree: MvuTree }>;
+	reconcile?: boolean;
 }
 
 export interface ScribeResult {
@@ -59,7 +60,7 @@ export interface ScribeResult {
 }
 
 export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt: string; userText: string } {
-	const { state, userText, assistantText, charName, userName, mvu } = input;
+	const { state, userText, assistantText, charName, userName, mvu, reconcile = false } = input;
 	const panels = input.panels?.filter((p) => p.tree && typeof p.tree === "object") ?? [];
 	const knownCharacters = Object.keys(state.characters);
 	const nameGuide = knownCharacters.length
@@ -92,7 +93,7 @@ export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt:
 输出唯一字段：
 "patch"：从本轮对话中提取需要记账的持久变化。字段语义：
 - "time" / "location"：字符串，整体替换。剧内时间推移（入夜、次日清晨、数日后）必须更新 time。
-- "characters"：{ "名字": { "affinity"?, "status"?, "notes"?, "at"? } }，按字段合并。affinity 为 -100..100 的对${userName}态度值，基于账本当前值小步调整（通常 ±1~10）。"at" 是该角色此刻所在地，与 location 同一写法；离开当前场景的人写他去了哪。${nameGuide}；只有全新出场的人物才建新条目，键用正文中的人名——不要把作品/剧本标题（如「${charName}」这类非人名）当作角色。
+- "characters"：{ "名字": { "affinity"?, "status"?, "notes"?, "at"? } }，按字段合并。affinity 为 -100..100 的对${userName}态度值，${reconcile ? "依据账本与所给近期剧情证据输出当前绝对值，不做增量加减" : "基于账本当前值小步调整（通常 ±1~10）"}。"at" 是该角色此刻所在地，与 location 同一写法；离开当前场景的人写他去了哪。对话明确人物仍在场时，将 at 与当前 location 写法统一；角色明确随场景移动时更新地点。不要仅凭账本中的旧 at 推断其离场。${nameGuide}；只有全新出场的人物才建新条目，键用正文中的人名——不要把作品/剧本标题（如「${charName}」这类非人名）当作角色。
 - "inventory"：字符串数组，整体替换——只在物品归属变化时给出变化后的完整清单，条目注明归属（如「黄铜怀表（${userName}持有）」）。
 - "flags"：键值对，按键合并（值为字符串）。
 - "plot_threads"：字符串数组，整体替换——新增或了结剧情线时给出完整清单。
@@ -264,7 +265,6 @@ interface RpSummaryPromptInput {
 	stateSnapshot: string;
 	/** 更早剧情的既有摘要（二次压缩时传入，合并进本次摘要） */
 	previousSummary?: string;
-	language: string;
 	userName: string;
 }
 
@@ -276,35 +276,34 @@ export interface RpSummaryPrompt {
 export function buildRpSummaryPrompt(input: RpSummaryPromptInput): RpSummaryPrompt {
 	const { conversationText, stateSnapshot, previousSummary, userName } = input;
 
-	const systemPrompt = `你是一场长篇角色扮演的场记。你的任务是为即将从上下文中裁掉的早期剧情写一份接力摘要——它将成为主演模型唯一能看到的「前情」，后续剧情将基于「本摘要 + 保留的最近对话」继续演出。
+	const systemPrompt = `Write a compact running recap of the roleplay in <conversation> for the next writer. The next writer also has the untouched recent turns.
 
-用与对话原文相同的语言输出，按以下结构：
+Use the language of the newly covered story prose for the entire recap, including headings. Identify it from <conversation>, not from these instructions, speaker names, the older recap, or the ledger. Translate retained material from an older recap if necessary. The headings below describe sections; translate them, do not copy their wording unless the story is in English.
 
-## 前情提要
-按时间顺序概述关键事件（谁做了什么、结果如何）。保留剧内时间刻度（如「第一天黄昏」「第三天清晨」）。
+## Recap
+Record the important events chronologically, including in-world time and outcomes.
 
-## 人物
-每位出场人物：性格要点、说话习惯、对${userName}的称呼、与${userName}的关系温度及演变轨迹。
+## Characters
+Keep distinctive behavior, forms of address for ${userName}, and important relationship changes.
 
-## 承诺与伏笔
-逐条列出所有未兑现的约定、只被提过一次的线索、悬而未决的问题。这一节宁多勿漏——漏掉一条，后续剧情就永远丢失它。
+## Promises and open threads
+Keep unresolved clues, commitments, and questions. Merge repeated details instead of restating them.
 
-## 事实账
-物品归属（谁持有什么）、伤势与身体状态、重要数值、时间线（现在是剧内第几天）。
+## Facts
+Keep relevant ownership, injuries, values, and timeline facts.
 
-## 当前场景
-剧内此刻：第几天、什么时段、什么地点、谁在场、正在进行什么动作。必须以对话记录中**最新**的场景为准——这是续演点，写成更早的场景会导致剧情倒退。
+## Last covered scene
+Give the time, place, people present, and action at the end of <conversation>. Do not jump beyond the covered text. Incorporate still-relevant facts and unresolved threads from <previous-summary>. Use the newest explicit story evidence when the ledger or older recap disagrees.
 
-规则：只记录对话中实际发生的事；不虚构、不评论、不续写剧情；人名地名保持剧中写法。`;
+Keep names as written in the story. Do not invent, comment on, or continue the scene.`;
 
 	const parts: string[] = [`<conversation>\n${conversationText}\n</conversation>`];
 	if (previousSummary) {
 		parts.push(
-			`<previous-summary>\n${previousSummary}\n</previous-summary>\n\n（上面是更早剧情的既有摘要：把它的内容合并进本次摘要，不要丢弃其中的承诺、伏笔与事实。）`,
+			`<previous-summary>\n${previousSummary}\n</previous-summary>`,
 		);
 	}
-	parts.push(`【工具账本快照】（辅助参考；记账可能滞后于正文，与对话记录冲突时以对话记录为准）\n${stateSnapshot}`);
-	parts.push("请按系统指令输出接力摘要。");
+	parts.push(`<ledger>\n${stateSnapshot}\n</ledger>`);
 
 	return { systemPrompt, userText: parts.join("\n\n") };
 }

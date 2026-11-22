@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applyPatch, defaultState } from "../src/state.ts";
+import { applyPatch, defaultState, formatRosterIndex, formatState, samePlace } from "../src/state.ts";
 
 test("名录不删：活跃状态里移除后名录仍在案", () => {
 	const r1 = applyPatch(defaultState(), {
@@ -16,6 +16,25 @@ test("名录不删：活跃状态里移除后名录仍在案", () => {
 	assert.ok("旧约" in (r2.state.roster?.events ?? {}));
 });
 
+
+test("同地点大小写、Unicode 和空白变体保持在场", () => {
+	assert.equal(samePlace("  GREAT　Hall  ", "great hall"), true);
+	assert.equal(samePlace("Old Hall", "New Hall"), false);
+	const s = applyPatch(defaultState(), {
+		location: "Great Hall",
+		characters: { Daenerys: { at: " great　hall " } },
+	}).state;
+	assert.match(formatState(s), /Daenerys：好感 0；在场/);
+});
+
+test("名录送模索引限定长度并标记省略历史条目", () => {
+	const events = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`Event ${i} ${"x".repeat(90)}`, "day one"]));
+	const index = formatRosterIndex({ ...defaultState(), roster: { characters: {}, items: {}, places: {}, events } });
+	assert.ok(index.length <= 3003, `index length=${index.length}`);
+	assert.ok(index.includes("未列"));
+	assert.ok(index.includes("Event 59"));
+	assert.ok(!index.includes("Event 0"));
+});
 test("名录容量：剧情线超上限丢最旧", () => {
 	let s = defaultState();
 	for (let i = 0; i < 70; i++) {

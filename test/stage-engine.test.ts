@@ -116,11 +116,31 @@ test("引擎：一拍全链路（user 落树 → 流式 → assistant 落树 →
 
 		const branch = sm.getBranch() as Array<{ type: string; message?: { role?: string; content?: unknown } }>;
 		const roles = branch.filter((e) => e.type === "message").map((e) => e.message?.role);
-		assert.deepEqual(roles, ["user", "assistant"]);
+		assert.deepEqual(roles, ["user", "assistant"], JSON.stringify(end));
 		assert.ok(partials > 0, "流式部分事件应外发");
 		assert.ok(end && !end.aborted && !end.error && end.entryId, "谢幕信息应带落树条目 id");
 		assert.ok(JSON.stringify(branch).includes("山门夜巡"), "正文在树上");
 		assert.equal(engine.isStreaming, false);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("手动刷新按当前分支对账，重复刷新不重复追加状态", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const correction = fauxAssistantMessage(JSON.stringify({ patch: { characters: { 云澜: { affinity: 8 } } } }));
+		reg.setResponses([...directBeat("云澜在月门前与沈舟约定明日同行。"), correction, correction] as never);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		await engine.performTurn("我与云澜约定明日同行。");
+		const before = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state").length;
+		assert.equal((await engine.refreshState()).kind, "applied");
+		assert.equal((await engine.refreshState()).kind, "skipped");
+		const states = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state");
+		assert.equal(states.length, before + 1);
+		assert.equal(stateFromBranch(sm.getBranch()).characters["云澜"]?.affinity, 8);
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });

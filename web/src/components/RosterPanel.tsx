@@ -4,6 +4,7 @@
  */
 
 import { apiPut, type StatePatchResult } from "../api.ts";
+import { samePlace } from "../../../src/state-utils.ts";
 import type { WorldState } from "../wire.ts";
 import { IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
@@ -39,7 +40,7 @@ export function RosterPanel({
 		// 无 at 的旧数据按在场处理（不凭空把人判离场）。
 		characters: new Set(
 			Object.entries(state?.characters ?? {})
-				.filter(([, c]) => !c.at || c.at === state?.location)
+				.filter(([, c]) => !c.at || samePlace(c.at, state?.location))
 				.map(([name]) => name),
 		),
 		places: new Set(state?.location ? [state.location] : []),

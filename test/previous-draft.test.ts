@@ -7,7 +7,7 @@ import { PreviousDraftEditor, previousReply } from "../src/stage/previous-draft.
 import { applyDraftRevisions, DRAFT_REVISION_TYPE, type DraftBranchEntry } from "../src/stage/draft-projection.ts";
 import { DraftStore } from "../src/stage/draft-store.ts";
 import { createWorkspace, runWriteTool, type WorkspaceDeps } from "../src/stage/workspace.ts";
-import { rebuildHistory } from "../src/stage/assemble.ts";
+import { rebuildHistory, type BranchEntryLike } from "../src/stage/assemble.ts";
 import { planCompaction } from "../src/stage/compact.ts";
 import { toWireHistory } from "../server/wire.ts";
 
@@ -128,10 +128,13 @@ test("修订投影：压缩按剧情拍计数，较晚的修订回执也覆盖�
 		branch.push({ id: `e${i}`, type: "message", message: { role: "user", content: "不要计入剧情拍。" } });
 		branch.push({ id: `r${i}`, type: "custom", customType: DRAFT_REVISION_TYPE, data: { targetId: "a3", requestId: `e${i}`, text: `修后正文${i}` } });
 	}
-	assert.equal(planCompaction(branch as any, { everyNTurns: 2, keepRecentBeats: 2, minChars: 0, userName: "甲", charName: "乙" }), null);
+	const firstPlan = planCompaction(branch as BranchEntryLike[], { everyNTurns: 2, keepRecentBeats: 2, minChars: 0, userName: "甲", charName: "乙" });
+	assert.equal(firstPlan?.turns, 1, "第 3 个完成拍到期时保留最近两拍，只覆盖最旧一拍");
+	assert.ok(firstPlan?.conversationText.includes("正文1"));
+	assert.ok(!firstPlan?.conversationText.includes("修后正文3"));
 	branch.push({ id: "u4", type: "message", message: { role: "user", content: "输入4" } });
 	branch.push({ id: "a4", type: "message", message: { role: "assistant", content: "正文4" } });
-	const plan = planCompaction(branch as any, { everyNTurns: 1, keepRecentBeats: 1, minChars: 0, userName: "甲", charName: "乙" })!;
+	const plan = planCompaction(branch as BranchEntryLike[], { everyNTurns: 1, keepRecentBeats: 1, minChars: 0, userName: "甲", charName: "乙" })!;
 	assert.equal(plan.turns, 3);
 	assert.ok(plan.conversationText.includes("修后正文3"));
 	assert.ok(!plan.conversationText.includes("不要计入剧情拍"));

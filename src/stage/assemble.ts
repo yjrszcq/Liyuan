@@ -55,6 +55,28 @@ const textOf = (content: unknown): string => {
 		.join("");
 };
 
+/** 已投影的剧情分支中，完成拍的用户输入与定稿正文下标。 */
+export function completedStoryBeats(branch: BranchEntryLike[]): Array<{ start: number; end: number }> {
+	const beats: Array<{ start: number; end: number }> = [];
+	let start = -1;
+	for (let i = 0; i < branch.length; i++) {
+		const e = branch[i]!;
+		if (e.type !== "message" || !e.message) continue;
+		const m = e.message;
+		if (m.role === "user") {
+			const text = textOf(m.content).trim();
+			start = text && !isBackstageText(text) ? i : -1;
+		} else if (start >= 0 && m.role === "assistant") {
+			const phase = (m.details?.rpDraft as { phase?: string } | undefined)?.phase;
+			if ((phase ? phase === "sealed" : !m.stopReason || m.stopReason === "stop") && cleanAssistantText(textOf(m.content)).trim()) {
+				beats.push({ start, end: i });
+				start = -1;
+			}
+		}
+	}
+	return beats;
+}
+
 /** 叙事向 custom 消息 → 历史角色映射；不在表内的 custom 不进送模流 */
 const CUSTOM_AS_ASSISTANT = new Set(["rp-greeting", "rp-edited-reply"]);
 const CUSTOM_AS_USER = new Set(["rp-import"]);
@@ -98,16 +120,16 @@ const summaryDataOf = (e: BranchEntryLike): RpSummaryData | null => {
 /**
  * 分支上生效的前情摘要 = **最后一条**摘要条目（每次压缩都把上一份合并进来，故后者全覆盖前者）。
  * 兼容旧会话里 pi 写的 `compaction` 条目：覆盖边界取 firstKeptEntryId 的前一条。
- * 返回 cut = 需要从历史里去掉的条目数（分支前缀长度）。
+ * cut 为已覆盖前缀的长度，recordedAt 为摘要实际写入的位置（压缩周期从这里重新计数）。
  */
-export function activeSummary(branch: BranchEntryLike[]): { summary: string; cut: number } | null {
+export function activeSummary(branch: BranchEntryLike[]): { summary: string; cut: number; recordedAt: number } | null {
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const e = branch[i];
 		const data = summaryDataOf(e);
 		if (data) {
 			const at = branch.findIndex((x) => x.id === data.coversThroughId);
 			// 覆盖锚点找不到（异常树）时退守到摘要条目自身之前
-			return { summary: data.summary, cut: at >= 0 ? at + 1 : i };
+			return { summary: data.summary, cut: at >= 0 ? at + 1 : i, recordedAt: i };
 		}
 		// 旧会话：pi 的 compaction 条目（summary + firstKeptEntryId）
 		if (e.type === "compaction") {
@@ -117,7 +139,7 @@ export function activeSummary(branch: BranchEntryLike[]): { summary: string; cut
 				typeof legacy.firstKeptEntryId === "string"
 					? branch.findIndex((x) => x.id === legacy.firstKeptEntryId)
 					: -1;
-			return { summary: legacy.summary, cut: keptAt >= 0 ? keptAt : i };
+			return { summary: legacy.summary, cut: keptAt >= 0 ? keptAt : i, recordedAt: i };
 		}
 	}
 	return null;
@@ -367,7 +389,7 @@ ${index}`,
 - 标注【开场】的消息是 ${card.name} 的既定开场白，剧情从那一刻继续。
 - 标注【前情提要】的消息是更早剧情的接力摘要，是既定事实。
 - 标注【世界状态】的消息是当前事实基准：剧情记忆与它冲突时，以状态为准并在叙事内自然圆回，绝不跳出剧情解释。
-- 标注【登场名录】的消息是本局登场过的人物/地点/物品/剧情线全量名字与首次登场时间${tools !== false ? "，细节可用 `memory_search` 查" : ""}；名录之外的名字才是新登场。
+- 标注【登场名录】的消息列出最近登场的人物/地点/物品/剧情线，可能省略更早条目；未列出不代表新登场，当前世界状态优先，细节可用 memory_search 查。
 - 标注【活跃面板】的消息是各面板的当前内容（用户可能手改过），其中事实为准。
 - 标注【相关设定】【设定集索引】的消息都是设定条目的标题（前者本拍关键词命中，后者全库）${tools !== false ? "，正文用 `lorebook_search` 取" : ""}。
 - 标注【剧情记忆】的消息是历史正文检索片段，按需取用，勿整段照抄。`,

@@ -6531,20 +6531,10 @@ input.panel-search.num {
 
 /* ── 戏境状态栏面板（右侧分栏）：桌面端平立展开 ── */
 .status-panel {
-	flex: 1 1 auto;
-	display: flex;
-	flex-direction: column;
-	min-height: 0;
-	overflow: hidden;
+	flex: 0 0 auto;
+	min-height: max-content;
 	background: transparent;
-}
-.status-panel-scroll {
-	flex: 1 1 auto;
-	overflow-y: auto;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
+	overflow: visible;
 }
 .sp-empty-banner {
 	font-size: 12px;

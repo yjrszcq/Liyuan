@@ -14,7 +14,7 @@ import { DraftStore, draftDirectory, listDrafts } from "./draft-store.ts";
 import { applyDraftRevisions, DRAFT_REVISION_TYPE } from "./draft-projection.ts";
 import { PreviousDraftEditor } from "./previous-draft.ts";
 import { projectToolContext } from "./context.ts";
-import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_PROCESS_TYPE, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
+import { authoringHistory, authoringRequestIds, contextText, conversationMode, storyBranch, CONVERSATION_PROCESS_TYPE, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, runAuthoringTool, AUTHORING_NATIVE_TOOLS } from "./authoring.ts";
 import { AGENT_ASK_TOOL, AGENT_SCREENSHOT_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
 import { btwSystemPrompt, buildBtwCardBrief, buildBtwStageBlock } from "./btw.ts";
@@ -43,6 +43,7 @@ import {
 	buildStageSystemPrompt,
 	formatLoreIndex,
 	rebuildHistory,
+	completedStoryBeats,
 	stateFromBranch,
 	type BranchEntryLike,
 	type PromptFragment,
@@ -64,6 +65,7 @@ import {
 	SUMMARY_ENTRY_TYPE,
 	type CompactOutcome,
 	type RpSummaryData,
+	serializeForSummary,
 } from "./compact.ts";
 import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
 import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
@@ -616,6 +618,7 @@ export const mergeFinalText = (draft: string, text: string): string => {
 export class StageEngine {
 	#deps: StageEngineDeps;
 	#busy = false;
+	#refreshing = false;
 	#queue: Array<{ text: string; note?: string; onDone?: (info: StageTurnEndInfo) => void }> = [];
 	#abort: AbortController | null = null;
 	#warnedProtocolDrop = "";
@@ -772,7 +775,7 @@ export class StageEngine {
 	}
 
 	get isStreaming(): boolean {
-		return this.#busy;
+		return this.#busy || this.#refreshing;
 	}
 
 	/**
@@ -780,7 +783,7 @@ export class StageEngine {
 	 * directorNote＝导演备注（PLAN-DIRECTOR-NOTE）：戏外当拍指示，只进本拍装配、不落树，用完即焚。
 	 */
 	async performTurn(userText: string, directorNote?: string): Promise<StageTurnEndInfo> {
-		if (this.#busy) {
+		if (this.#busy || this.#refreshing) {
 			this.#queue.push({ text: userText, ...(directorNote ? { note: directorNote } : {}) });
 			return { aborted: false };
 		}
@@ -791,7 +794,7 @@ export class StageEngine {
 
 	/** 供脚本接口使用：即使忙时排队，也等待该拍真正执行完毕并返回其 StageTurnEndInfo */
 	async performTurnAndWait(userText: string, directorNote?: string): Promise<{ queued: boolean; info: StageTurnEndInfo }> {
-		if (this.#busy) {
+		if (this.#busy || this.#refreshing) {
 			return await new Promise<{ queued: boolean; info: StageTurnEndInfo }>((resolve) => {
 				this.#queue.push({
 					text: userText,
@@ -807,7 +810,7 @@ export class StageEngine {
 
 	/** 再生成：叶已钉在 user（swipe/reroll 已 branch），不追加 user 消息直接开演；directorNote 同 performTurn */
 	async regenerate(directorNote?: string): Promise<StageTurnEndInfo> {
-		if (this.#busy) return { aborted: false, error: "busy" };
+		if (this.#busy || this.#refreshing) return { aborted: false, error: "busy" };
 		const info = await this.#run(null, directorNote);
 		await this.#drain();
 		return info;
@@ -819,10 +822,54 @@ export class StageEngine {
 		void this.#deps.getSession().abort();
 	}
 
-	/**
-	 * 旁路助手（/btw）只读装配：从当前扮演主会话分支现算干净剧情视野与 system，
-	 * 不占 #busy、不改会话树；台前流式进行中也能安全读取已落树的历史拍。
-	 */
+	/** Reconcile the current ledger against recent completed story on this branch. */
+	async refreshState(): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }> {
+		if (this.#busy || this.#refreshing) return { kind: "skipped", message: "当前有生成或记账任务。" };
+		const model = this.#deps.getModel();
+		if (!model) return { kind: "failed", message: "尚未配置剧情模型。" };
+		const sm = this.#deps.getSession().sessionManager;
+		const materials = loadStageMaterials(this.#deps.cwd);
+		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];
+		const beats = completedStoryBeats(branch);
+		if (!beats.length) return { kind: "skipped", message: "当前分支还没有已完成的剧情拍。" };
+		const recent = beats.slice(-12);
+		const context = serializeForSummary(branch.slice(recent[0]!.start, recent.at(-1)!.end + 1), materials.config.userName, materials.card.name);
+		if (!context.trim()) return { kind: "skipped", message: "当前分支没有可对账的剧情正文。" };
+		const state = seedMvuIfNeeded(stateFromBranch(branch), materials.allLoreEntries ?? materials.card.book,
+			materials.config.userName, materials.card.name, materials.cardAuthorScripts) as WorldState;
+		this.#refreshing = true;
+		try {
+			const auth = await this.#deps.getAuth(model);
+			const getCurrentState = () => seedMvuIfNeeded(
+				stateFromBranch(storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[]),
+				materials.allLoreEntries ?? materials.card.book, materials.config.userName, materials.card.name,
+				materials.cardAuthorScripts,
+			) as WorldState;
+			const result = await runScribeTurn({
+				sideText: (systemPrompt, userText) => this.#sideText(model, systemPrompt, userText, auth, "scribe"),
+				appendStateEntry: (next) => sm.appendCustomEntry(STATE_ENTRY_TYPE, next),
+				getLeafId: () => this.#deps.getSession().sessionManager === sm ? sm.getLeafId() : null,
+				getState: () => getCurrentState(),
+				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
+				onActivity: (detail) => this.#deps.events?.onActivity?.(detail),
+			}, {
+				state, userText: "", assistantText: `【当前分支最近剧情·用于状态对账】\n${context.slice(-20_000)}`,
+				charName: materials.card.name, userName: materials.config.userName,
+				mvuRules: state.mvu ? findMvuRules(materials.card.book) : undefined, reconcile: true,
+			});
+			sm.flush();
+			if (result.kind === "failed") return { kind: "failed", message: result.error };
+			if (result.kind === "stale") return { kind: "stale", message: "对账期间分支或状态发生变化，未写入。" };
+			if (result.kind === "skipped") return { kind: "skipped", message: result.reason === "unchanged" ? "状态已与当前剧情一致。" : "当前剧情没有需要更新的状态。" };
+			return { kind: "applied", message: `已更新 ${result.applied.length} 项状态。` };
+		} catch (error) {
+			return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+		} finally {
+			this.#refreshing = false;
+			await this.#drain();
+		}
+	}
+	/** Build a read-only view of the current roleplay branch for the /btw assistant. */
 	btwAssembly(): { systemPrompt: string; stageBlock: string; cardDir: string | null; chatDir: string | null; config: ReturnType<typeof loadStageConfig> } {
 		const cwd = this.#deps.cwd;
 		const sm = this.#deps.getSession().sessionManager;
@@ -1886,7 +1933,7 @@ export class StageEngine {
 	 * 流式中拒绝——压缩要改上下文，不能与正在装配的一拍打架。
 	 */
 	async compactNow(): Promise<CompactOutcome> {
-		if (this.#busy) return { kind: "skipped", reason: "busy" };
+		if (this.#busy || this.#refreshing) return { kind: "skipped", reason: "busy" };
 		const model = this.#deps.getModel();
 		if (!model) return { kind: "failed", error: "尚未配置剧情模型" };
 		this.#busy = true;
@@ -2082,7 +2129,6 @@ export class StageEngine {
 				{
 					branch,
 					state: stateFromBranch(branch),
-					language: config.language,
 					userName: config.userName,
 					charName: card.name,
 					everyNTurns,

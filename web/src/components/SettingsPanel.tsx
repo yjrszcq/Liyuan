@@ -808,8 +808,8 @@ export function SettingsPanel({
 					<section className="sp-section">
 						<h4>{t("上下文压缩")}</h4>
 						<SliderField
-							label={t("固定楼层压缩周期")}
-							hint={t("每 N 个剧情轮把早期正文压成接力摘要（原文归档进剧情库可召回）；0 = 仅在上下文吃紧时被动压缩")}
+							label={t("剧情自动压缩周期")}
+							hint={t("扮演每 N 个完成拍压缩一次，保留最近 6 拍；续写保留最近 N 章。0 = 关闭自动压缩，可手动压缩当前上下文。")}
 							value={compactEvery}
 							min={0}
 							max={100}

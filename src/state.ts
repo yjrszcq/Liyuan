@@ -7,6 +7,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { readJsonFile } from "./jsonio.ts";
 import type { CharacterState, StateRoster, WorldState } from "./types.ts";
+import { samePlace } from "./state-utils.ts";
+export { samePlace };
 
 const TOP_KEYS = ["time", "location", "characters", "inventory", "flags", "plot_threads"] as const;
 
@@ -199,6 +201,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 	return { state: next, applied, warnings };
 }
 
+
 /** 注入用的紧凑可读格式 */
 export function formatState(state: WorldState): string {
 	const lines: string[] = [];
@@ -209,7 +212,7 @@ export function formatState(state: WorldState): string {
 		if (c.status) parts.push(`状态：${c.status}`);
 		// 位置：与 location 相同＝在场，不同＝人在别处。给的是两个地名这条事实，
 		// 「他能不能看见这边」由模型自己判断（不替它下结论）。
-		if (c.at) parts.push(c.at === state.location ? "在场" : `在：${c.at}`);
+		if (c.at) parts.push(samePlace(c.at, state.location) ? "在场" : `在：${c.at}`);
 		if (c.notes) parts.push(`备注：${c.notes}`);
 		lines.push(`${name}：${parts.join("；")}`);
 	}
@@ -279,46 +282,36 @@ function registerRoster(next: WorldState): void {
 	};
 }
 
-/**
- * 名录索引单节的预算（超出则该节退成纯名字表——名字不截断）。
- *
- * 1200 ≈ 30 条剧情线带时间。实测真实会话：剧情线名字均长 21.6 字（常是整句，如
- * 「灵族大祭司求见，欲借大昭为靠山…」），加上登场时间后一节就要 ~317 字——旧预算 240
- * **一加时间就触顶、整节退回纯名字**，等于白改。三节实测合计约 620 字/拍
- * （人物 84 + 物品 220 + 剧情线 317），相对蓝灯常驻每拍无条件的 25632 字约 2.4%。
- * 触顶时的降级仍是「牺牲时间不牺牲名字」——名字全量是「名录之外才是新登场」的前提。
- */
-const ROSTER_SECTION_MAX_CHARS = 1200;
+/** Roster prompt budget per category; the editor retains the complete roster. */
+const ROSTER_SECTION_MAX_CHARS = 750;
 
 function rosterSection(label: string, entries: Array<[string, string]>): string | undefined {
 	if (entries.length === 0) return undefined;
-	const withBlurb = entries.map(([name, blurb]) => (blurb ? `${name}（${blurb}）` : name));
-	// 名字必须全量出：「名录之外的名字才是新登场」这条推断只有在名录完整时才成立，
-	// 按条目截断会让被截掉的角色变成「新人」。装不下就整节退成纯名字，牺牲简述不牺牲完整性。
-	// 规模有界：ROSTER_CAPS 已把条目数封在 100/100/60。
-	const total = withBlurb.reduce((n, t) => n + t.length + 1, 0);
-	const titles = total <= ROSTER_SECTION_MAX_CHARS ? withBlurb : entries.map(([name]) => name);
-	return `${label}：${titles.join("、")}`;
+	const prefix = `${label}：`;
+	const recent: string[] = [];
+	let omitted = 0;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const [name, blurb] = entries[i]!;
+		const value = blurb ? `${name}（${blurb}）` : name;
+		const note = omitted ? `、另有 ${omitted} 条历史记录未列` : "";
+		if (`${prefix}${[value, ...recent].join("、")}${note}`.length > ROSTER_SECTION_MAX_CHARS) {
+			omitted++;
+			continue;
+		}
+		recent.unshift(value);
+	}
+	const note = omitted ? `${recent.length ? "、" : ""}另有 ${omitted} 条历史记录未列` : "";
+	return `${prefix}${recent.join("、")}${note}`;
 }
 
-/**
- * 名录索引渲染：**全量**列出本局登记过的人物/物品/剧情线（在场的也列）。
- * 与【世界状态】的分工是详略而非有无——状态给当前详情，名录给「出现过什么」的完整名字表，
- * 模型据此判断一个名字是旧识还是新登场，细节靠 memory_search 召回。
- *
- * **全空也出块**（「（尚无登记）」），与 formatState 的「（尚无记录）」同一口径：开场那拍
- * 名录必然是空的，而那恰恰是最需要让模型看见「这里有可查的东西、现在是空的」的一拍——
- * 空着不出块，模型根本不知道有这回事。给的是通道状态这条事实，不是「你去查」这条指令。
- */
+/** Render the most recent roster entries for the model; this index is not exhaustive. */
 export function formatRosterIndex(state: WorldState): string {
 	const r = state.roster;
-	const sections = r
-		? [
-				rosterSection("人物", Object.entries(r.characters)),
-				rosterSection("地点", Object.entries(r.places ?? {})),
-				rosterSection("物品", Object.entries(r.items)),
-				rosterSection("剧情线", Object.entries(r.events)),
-			].filter((s): s is string => Boolean(s))
-		: [];
+	const sections = r ? [
+		rosterSection("人物", Object.entries(r.characters)),
+		rosterSection("地点", Object.entries(r.places ?? {})),
+		rosterSection("物品", Object.entries(r.items)),
+		rosterSection("剧情线", Object.entries(r.events)),
+	].filter((s): s is string => Boolean(s)) : [];
 	return sections.length ? sections.join("；") : "（尚无登记）";
 }
