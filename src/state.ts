@@ -89,6 +89,21 @@ export function canonicalizeCharacterKeys(
  */
 export function applyPatch(state: WorldState, patch: Record<string, unknown>): PatchResult {
 	const next: WorldState = structuredClone(state);
+	// Migrate legacy snapshots before applying this patch so removal cannot erase the last
+	// opportunity to capture their historical roster. Missing places were added to the roster schema later.
+	if (!state.roster || !state.roster.places) registerRoster(next);
+	const rosterUpdates = {
+		characters: new Set<string>(),
+		items: new Set<string>(),
+		events: new Set<string>(),
+		places: new Set<string>(),
+	};
+	const rosterRemovals = {
+		characters: new Set<string>(),
+		items: new Set<string>(),
+		events: new Set<string>(),
+		places: new Set<string>(),
+	};
 	const applied: string[] = [];
 	const warnings: string[] = [];
 
@@ -99,6 +114,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 				if (typeof value === "string") {
 					next[key] = value;
 					applied.push(`${key} → ${value}`);
+					rosterUpdates.places.add(value);
 				} else warnings.push(`${key} 需要字符串，已忽略`);
 				break;
 			}
@@ -121,6 +137,8 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 						if (typeof p.notes === "string") cur.notes = p.notes;
 						if (typeof p.at === "string") cur.at = p.at;
 						next.characters[name] = cur;
+						rosterUpdates.characters.add(name);
+						if (cur.at) rosterUpdates.places.add(cur.at);
 						applied.push(`characters.${name} 已更新`);
 					}
 				} else warnings.push("characters 需要对象，已忽略");
@@ -160,6 +178,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 						);
 					}
 					next[key] = kept;
+					for (const item of kept) rosterUpdates[key === "inventory" ? "items" : "events"].add(item);
 					applied.push(`${key} → [${kept.join("、")}]`);
 				} else warnings.push(`${key} 需要完整数组（整体替换语义），已忽略`);
 				break;
@@ -182,6 +201,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 						for (const [name, v] of Object.entries(patchTable as Record<string, unknown>)) {
 							if (v === null) {
 								delete dest[name];
+								rosterRemovals[table].add(name);
 								applied.push(`roster.${table}.${name} 已移除`);
 							} else if (typeof v === "string") {
 								dest[name] = v.slice(0, 60);
@@ -197,7 +217,10 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 				warnings.push(`未知字段 ${key}，允许的顶层字段：${TOP_KEYS.join(", ")}`);
 		}
 	}
-	registerRoster(next);
+	for (const table of ["characters", "places", "items", "events"] as const) {
+		for (const name of rosterRemovals[table]) rosterUpdates[table].delete(name);
+	}
+	registerRoster(next, rosterUpdates);
 	return { state: next, applied, warnings };
 }
 
@@ -238,8 +261,15 @@ function capRoster(reg: Record<string, string>, cap: number): Record<string, str
 	return out;
 }
 
+type RosterUpdates = {
+	characters: Set<string>;
+	items: Set<string>;
+	events: Set<string>;
+	places: Set<string>;
+};
+
 /**
- * 名录登记（applyPatch 咽喉点调用）：把当前活跃的人物/物品/剧情线并入名录，
+ * 首次迁移时完整导入旧账本；之后只登记当前活跃或本次明确更新的实体，避免离场名录删除被自动复活。
  * 附上**首次登场时的剧情时间**（`state.time`，自由文本；为空则只留名字）。
  *
  * ## 为什么存时间而不是状态简述（8/23 改判）
@@ -256,23 +286,35 @@ function capRoster(reg: Record<string, string>, cap: number): Record<string, str
  * 借鉴 st-memory-enhancement（木悠记忆表格）的表切分：它把「时空表格」（保持一行的
  * 当前状态）与「重要事件历史表格」（带`日期`列的追加历史）分成两张表，日期只是普通一列。
  */
-function registerRoster(next: WorldState): void {
+
+function registerRoster(next: WorldState, updates?: RosterUpdates): void {
+	const migratingAll = !next.roster;
+	const migratingPlaces = migratingAll || !next.roster?.places;
 	const r: StateRoster = next.roster ?? { characters: {}, items: {}, events: {} };
 	const places = r.places ?? {};
 	const at = (next.time || "").slice(0, ROSTER_BLURB_MAX);
-	for (const name of Object.keys(next.characters)) {
+	const activeCharacters = Object.entries(next.characters).filter(([, character]) => !character.at || samePlace(character.at, next.location));
+	const characters = migratingAll
+		? Object.keys(next.characters)
+		: [...activeCharacters.map(([name]) => name), ...(updates?.characters ?? [])];
+	for (const name of characters) {
 		if (!(name in r.characters)) r.characters[name] = at;
 	}
-	for (const it of next.inventory) {
-		if (it && !(it in r.items)) r.items[it] = at;
+	const items = migratingAll ? next.inventory : [...next.inventory, ...(updates?.items ?? [])];
+	for (const item of items) {
+		if (item && !(item in r.items)) r.items[item] = at;
 	}
-	for (const t of next.plot_threads) {
-		if (t && !(t in r.events)) r.events[t] = at;
+	const events = migratingAll ? next.plot_threads : [...next.plot_threads, ...(updates?.events ?? [])];
+	for (const event of events) {
+		if (event && !(event in r.events)) r.events[event] = at;
 	}
-	// 地点：当前场景 + 各角色所在地都算「到过」。此前名录三张表独缺地点，
-	// 「回到曾去过的地方」这类判定无从成立（而地点是剧情里最常复访的东西）。
-	for (const p of [next.location, ...Object.values(next.characters).map((c) => c.at ?? "")]) {
-		if (p && !(p in places)) places[p] = at;
+	// Migrate all known places once; after that, enroll only the current scene, present characters,
+	// and entities explicitly updated by this patch so a deleted departed entry stays deleted.
+	const knownPlaces = migratingPlaces
+		? Object.values(next.characters).map((character) => character.at ?? "")
+		: activeCharacters.map(([, character]) => character.at ?? "");
+	for (const place of [next.location, ...knownPlaces, ...(updates?.places ?? [])]) {
+		if (place && !(place in places)) places[place] = at;
 	}
 	next.roster = {
 		characters: capRoster(r.characters, ROSTER_CAPS.characters),
