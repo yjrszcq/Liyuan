@@ -9106,7 +9106,7 @@ label.drawer-btn {
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	overflow: auto;
 }
 .floatwin.is-dragging iframe {
 	pointer-events: none;

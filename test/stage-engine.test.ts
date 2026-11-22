@@ -550,11 +550,14 @@ test("ask：注入 askUser 时 ask 上清单", async () => {
  * 旁路条目（RpConfig.sideModel → StageEngineDeps.getSideEntry）：
  * 场记/压缩不再跟随剧情模型，模型和思考档都取自连接配置里那一条条目。
  */
-test("引擎：旁路调用走 sideEntry 的模型与它自己的档，并按它重取鉴权", async () => {
+test("引擎：场记与手动刷新均走 sideEntry 模型和思考档，并按它重取鉴权", async () => {
 	const { cwd, sm } = makeStage();
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }, { id: "faux-side", maxTokens: 12000 }] });
 	try {
-		reg.setResponses(directBeat("云澜垂眸受了半礼。") as never);
+		reg.setResponses([
+			...directBeat("云澜垂眸受了半礼。"),
+			fauxAssistantMessage(JSON.stringify({ patch: { time: "子时" } })),
+		] as never);
 		const calls: Array<{ id: string; reasoning: unknown; maxTokens: unknown }> = [];
 		const authFor: string[] = [];
 		const recording: StageStreamFn = (model, ctx, options) => {
@@ -581,7 +584,12 @@ test("引擎：旁路调用走 sideEntry 的模型与它自己的档，并按它
 		assert.ok(side.length > 0, "场记那一发走旁路条目的模型");
 		assert.equal(side[0]!.reasoning, "off", "档取自那条条目，不是引擎自己定的");
 		assert.equal(side[0]!.maxTokens, 12000);
-		assert.ok(authFor.includes("faux-side"), "鉴权按旁路模型重取，不能沿用剧情模型的 key");
+		const callsBeforeRefresh = side.length;
+		assert.equal((await engine.refreshState()).kind, "applied");
+		const afterRefresh = calls.filter((c) => c.id === "faux-side");
+		assert.equal(afterRefresh.length, callsBeforeRefresh + 1, "强制同步也必须走旁路条目的模型");
+		assert.equal(afterRefresh.at(-1)!.reasoning, "off");
+		assert.ok(authFor.filter((id) => id === "faux-side").length >= 2, "强制同步按旁路模型重取鉴权");
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });
