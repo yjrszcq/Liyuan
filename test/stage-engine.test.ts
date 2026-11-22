@@ -670,6 +670,33 @@ test("场记：可在不生成新剧情的情况下显式重试待补拍", async
 	}
 });
 
+test("场记：手动补账结束后处理已排队的剧情输入", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		reg.setResponses([fauxAssistantMessage("天色渐晚。"), fauxAssistantMessage("not JSON")]);
+		await engine.performTurn("等一会。");
+
+		let queued: Promise<boolean> | undefined;
+		reg.setResponses([
+			() => {
+				queued = engine.performTurnAndWait("现在出门。").then(({ queued }) => queued);
+				return fauxScribe({ time: "黄昏" });
+			},
+			...directBeat("两人走出了庭院。"),
+		] as never);
+		assert.equal((await engine.retryPendingScribes()).kind, "applied");
+		assert.equal(engine.pendingScribeCount(), 0);
+		assert.ok(sm.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some((part) => part.type === "text" && part.text.includes("两人走出了庭院"))), "排队的剧情不能卡到下一次输入");
+		assert.equal(await queued, true);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("场记：待补拍的空补丁也推进分支完成标记", async () => {
 	const { cwd, sm } = makeStage();
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });

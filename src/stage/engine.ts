@@ -634,8 +634,7 @@ const completedScribeBeatIdsFromBranch = (branch: BranchEntryLike[]): Set<string
 			.filter((id): id is string => typeof id === "string"),
 	);
 
-const pendingScribesFromBranch = (branch: BranchEntryLike[]): PendingScribe[] => {
-	const completed = completedScribeBeatIdsFromBranch(branch);
+const pendingScribesFromBranch = (branch: BranchEntryLike[], completed = completedScribeBeatIdsFromBranch(branch)): PendingScribe[] => {
 	return branch
 		.filter((e) => e.type === "custom" && e.customType === "rp-scribe-pending" && e.data && typeof e.data === "object")
 		.map((e) => e.data as { beatId?: unknown; userText?: unknown; assistantText?: unknown })
@@ -863,7 +862,7 @@ export class StageEngine {
 		const pendingCount = this.pendingScribeCount();
 		if (this.#busy || this.#refreshing) return { kind: "skipped", message: "当前有生成或记账任务。", pendingCount };
 		if (!pendingCount) return { kind: "skipped", message: "当前没有待补记账。", pendingCount };
-		this.#busy = true;
+		this.#refreshing = true;
 		try {
 			await this.#recoverPendingScribes(false);
 			return { kind: "applied", message: "待补记账已完成。", pendingCount: this.pendingScribeCount() };
@@ -874,7 +873,8 @@ export class StageEngine {
 				pendingCount: this.pendingScribeCount(),
 			};
 		} finally {
-			this.#busy = false;
+			this.#refreshing = false;
+			await this.#drain();
 		}
 	}
 
@@ -2031,6 +2031,7 @@ export class StageEngine {
 			materials.cardAuthorScripts,
 		) as WorldState;
 		const mvuRules = seededState.mvu ? findMvuRules(materials.card.book) : undefined;
+		const leafBefore = sm.getLeafId();
 		/**
 		 * 本拍新声明的面板数据并进账本，赶在场记之前——这样场记这一拍就能看见新面板的树、
 		 * 顺手把它推到本拍剧情的状态。**已有的树不覆盖**：agent 重写外观时可能连 data 一起再给
@@ -2054,7 +2055,7 @@ export class StageEngine {
 			{
 				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, "scribe"),
 				appendStateEntry: appendCheckpoint,
-				getLeafId: () => sm.getLeafId(),
+				getLeafId: () => this.#deps.getSession().sessionManager === sm ? sm.getLeafId() : null,
 				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
 				onActivity: (d) => ev.onActivity?.(d),
 			},
@@ -2073,13 +2074,16 @@ export class StageEngine {
 			ev.onPendingScribes?.(this.pendingScribeCount());
 			return "pending";
 		}
+		if (r.kind === "stale") return "pending";
+		// 空补丁也会追加完成标记，必须同样受叶守卫保护。
+		if (r.kind === "skipped" && (this.#deps.getSession().sessionManager !== sm || sm.getLeafId() !== leafBefore)) return "pending";
 		if (r.kind === "skipped" && o.beatId) sm.appendCustomEntry("rp-scribe-complete", { beatId: o.beatId });
 		/**
-		 * 场记这拍没落账（无变化/解析失败/切了分支），新声明的面板数据就没人写下来——
+		 * 场记跳过时，新声明的面板数据可能还没写入账本。
 		 * 而 panel_write 不会再调一次，那棵树会永久丢失、面板永远显示不出值。所以补一笔。
 		 * r.kind === "applied" 时不必补：scribeState 已经带着声明进去、随账本一起落了。
 		 */
-		if (declared.length && r.kind !== "applied") {
+		if (declared.length && r.kind === "skipped") {
 			try {
 				sm.appendCustomEntry(STATE_ENTRY_TYPE, scribeState);
 				const f = this.#deps.getStateFile?.(sm.getSessionId());
@@ -2090,7 +2094,7 @@ export class StageEngine {
 		}
 		sm.flush();
 		ev.onPendingScribes?.(this.pendingScribeCount());
-		return r.kind === "stale" ? "pending" : "complete";
+		return "complete";
 	}
 
 	async #recoverPendingScribes(discoverMissing = true): Promise<void> {
@@ -2099,8 +2103,8 @@ export class StageEngine {
 		const stateEntries = branch.flatMap((e, index) =>
 			e.type === "custom" && e.customType === STATE_ENTRY_TYPE ? [{ e, index }] : [],
 		);
-		const pending = pendingScribesFromBranch(branch);
 		const completed = completedScribeBeatIdsFromBranch(branch);
+		const pending = pendingScribesFromBranch(branch, completed);
 		if (discoverMissing && stateEntries.length) {
 			const lastSnapshot = stateEntries.at(-1)!.index;
 			const pendingIds = new Set(pending.map((d) => d.beatId));
@@ -2131,7 +2135,11 @@ export class StageEngine {
 		const model = this.#deps.getModel();
 		if (!model) throw new Error("待补记账未完成：请先配置剧情模型后重试。");
 		const materials = loadStageMaterials(this.#deps.cwd);
+		const leafBefore = sm.getLeafId();
 		const auth = await this.#deps.getAuth(model);
+		if (this.#deps.getSession().sessionManager !== sm || sm.getLeafId() !== leafBefore) {
+			throw new Error("记账期间会话或分支已切换，未写入。");
+		}
 		for (const beat of pending) {
 			const state = stateFromBranch(sm.getBranch() as BranchEntryLike[]);
 			const outcome = await this.#scribe({

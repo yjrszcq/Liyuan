@@ -998,7 +998,8 @@ const helloFrame = (): ServerFrame => {
 		stats: safeStats(),
 		panels: currentPanels(),
 		workspace: workspace ? workspaceView(workspace) : undefined,
-		streaming: stage?.isStreaming ?? false,
+		// 补记账占用引擎，但没有剧情流，也不会发 agent:end。
+		streaming: stage?.turnMode !== undefined,
 		conversationMode: stage?.mode ?? "roleplay",
 		turnMode: stage?.turnMode,
 		...(stage?.mode === "agent" ? { story: storyOutline() } : {}),

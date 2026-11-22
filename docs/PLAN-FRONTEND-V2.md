@@ -135,4 +135,4 @@
 - 手动刷新显示真实阶段「准备剧情 / 场记分析中 / 写回账本」：引擎/场记回调经带 requestId 的 WebSocket 帧更新当前步骤；不显示百分比或进度条；原 POST /api/state/refresh 语义与状态栏按钮忙碌逻辑保留。
 - 验证：`npm test` 914 项（909 通过、5 跳过），`npm run web:build` 通过；Chromium 实测三个阶段按顺序高亮、完成后收起且按钮恢复可用，无进度条。Web typecheck 仍受 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 的既有错误阻断，改动文件无诊断。
 - 状态栏在当前会话分支存在待补场记时显示数量与「重新记账」按钮；按钮只重试持久化待补拍，失败保留入口；hello/结构化 WebSocket 帧同步重连和分支变化后的数量。
-- 验证（2026-11-22）：`npm test` 917 项（912 通过、5 跳过），`npm run web:build` 通过；Chromium + 确定性协议场景桩验证待补提示、失败保留按钮、成功收起。Web typecheck 仍被 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 的 7 项诊断阻断，本次修改文件无诊断。
+- 验证（2026-11-22）：`node --test test/*.test.ts` 与 `npm run web:build` 通过；Chromium + 确定性协议场景桩验证待补提示、重试期间按钮禁用、失败后保留入口、成功后收起，以及较新的 hello/WS 数量不被迟到 REST 响应覆盖。Web typecheck 仍被 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 的 7 项既有诊断阻断，本次修改文件无诊断。

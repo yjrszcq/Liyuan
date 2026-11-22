@@ -371,6 +371,7 @@ export default function App() {
 	const [stateRefreshStage, setStateRefreshStage] = useState<StateRefreshStage | null>(null);
 	const stateRefreshRequestIdRef = useRef<string | null>(null);
 	const [pendingScribeCount, setPendingScribeCount] = useState(0);
+	const pendingScribeVersion = useRef(0);
 	const [retryingScribes, setRetryingScribes] = useState(false);
 	const [stats, setStats] = useState<WireStats | null>(null);
 	const [warnings, setWarnings] = useState<WarnEntry[]>([]);
@@ -864,9 +865,10 @@ export default function App() {
 	const retryPendingScribes = useCallback(async () => {
 		if (retryingScribes) return;
 		setRetryingScribes(true);
+		const version = pendingScribeVersion.current;
 		try {
 			const result = await apiPost<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }>("/api/state/retry-scribes", {});
-			setPendingScribeCount(result.pendingCount);
+			if (pendingScribeVersion.current === version) setPendingScribeCount(result.pendingCount);
 			if (result.message) pushToast(result.kind === "failed" ? "warning" : "info", result.message);
 		} catch (error) {
 			pushToast("error", error instanceof Error ? error.message : String(error));
@@ -1157,6 +1159,7 @@ export default function App() {
 					if (!sameSession) setMsgEdit(null);
 					if (keepComposerFocus) requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
 					setWorldState(frame.state);
+					pendingScribeVersion.current++;
 					setPendingScribeCount(frame.pendingScribes ?? 0);
 					setStats(frame.stats);
 					// 一档皮肤:优先用 hello 同帧载荷(与消息同步),杜绝 REST 缓存/时序导致的漏皮
@@ -1426,6 +1429,7 @@ export default function App() {
 					if (stateRefreshRequestIdRef.current === frame.requestId) setStateRefreshStage(frame.stage);
 					break;
 				case "scribe_pending":
+					pendingScribeVersion.current++;
 					setPendingScribeCount(frame.count);
 					break;
 				case "state":
