@@ -11,11 +11,13 @@ test("POST /api/state/refresh invokes reconciliation and refuses while streaming
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-state-refresh-"));
 	let streaming = false;
 	let calls = 0;
+	const requestIds: Array<string | undefined> = [];
 	const host = {
 		cwd,
 		isStreaming: () => streaming,
-		refreshState: async () => {
+		refreshState: async (requestId?: string) => {
 			calls++;
+			requestIds.push(requestId);
 			return { kind: "applied", message: "updated" };
 		},
 	} as unknown as RestHost;
@@ -27,12 +29,13 @@ test("POST /api/state/refresh invokes reconciliation and refuses while streaming
 	await listening.promise;
 	const address = server.address();
 	assert.ok(address && typeof address !== "string");
-	const url = `http://127.0.0.1:${address.port}/api/state/refresh`;
+	const url = `http://127.0.0.1:${address.port}/api/state/refresh?requestId=ui-refresh`;
 	try {
 		const response = await fetch(url, { method: "POST", body: "{}" });
 		assert.equal(response.status, 200);
 		assert.deepEqual(await response.json(), { kind: "applied", message: "updated" });
 		assert.equal(calls, 1);
+		assert.deepEqual(requestIds, ["ui-refresh"]);
 
 		streaming = true;
 		const refused = await fetch(url, { method: "POST", body: "{}" });

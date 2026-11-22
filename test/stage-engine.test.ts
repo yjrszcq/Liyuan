@@ -136,7 +136,9 @@ test("手动刷新按当前分支对账，重复刷新不重复追加状态", as
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
 		await engine.performTurn("我与云澜约定明日同行。");
 		const before = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state").length;
-		assert.equal((await engine.refreshState()).kind, "applied");
+		const stages: Array<"prepare" | "analyze" | "write"> = [];
+		assert.equal((await engine.refreshState((stage) => { stages.push(stage); })).kind, "applied");
+		assert.deepEqual(stages, ["prepare", "analyze", "write"]);
 		assert.equal((await engine.refreshState()).kind, "skipped");
 		const states = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-state");
 		assert.equal(states.length, before + 1);

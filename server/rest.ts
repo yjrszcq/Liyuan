@@ -320,7 +320,7 @@ export interface RestHost {
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
 	/** 世界状态用户主权编辑（applyPatch 语义，落盘+ await statesync） */
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
-	refreshState(): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
+	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
 	notify(level: "info" | "warning" | "error", text: string): void;
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
@@ -3422,7 +3422,8 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			}
 			case "POST /api/state/refresh": {
 				if (refuseWhileStreaming()) return true;
-				const result = await host.refreshState();
+				const requestId = query.get("requestId");
+				const result = await host.refreshState(requestId && requestId.length <= 128 ? requestId : undefined);
 				sendJson(res, 200, result);
 				return true;
 			}

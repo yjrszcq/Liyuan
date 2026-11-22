@@ -143,6 +143,7 @@ import type {
 	WireStoryFile,
 	WireCheckpoint,
 	UpdateWire,
+	StateRefreshStage,
 	WorldState,
 } from "./wire.ts";
 
@@ -158,6 +159,8 @@ const TOAST_TTL_MS: Record<Toast["level"], number> = {
 	warning: 6000,
 	error: 8000,
 };
+
+const STATE_REFRESH_STAGES = ["prepare", "analyze", "write"] as const;
 
 /** 审计告警留存（原状态面板一栏，去中心化后进顶栏铃铛） */
 interface WarnEntry {
@@ -365,6 +368,8 @@ export default function App() {
 	// 右栏数据
 	const [worldState, setWorldState] = useState<WorldState | null>(null);
 	const [stateRefreshing, setStateRefreshing] = useState(false);
+	const [stateRefreshStage, setStateRefreshStage] = useState<StateRefreshStage | null>(null);
+	const stateRefreshRequestIdRef = useRef<string | null>(null);
 	const [stats, setStats] = useState<WireStats | null>(null);
 	const [warnings, setWarnings] = useState<WarnEntry[]>([]);
 	const [bellOpen, setBellOpen] = useState(false);
@@ -837,14 +842,21 @@ export default function App() {
 		}, TOAST_TTL_MS[level]);
 	}, []);
 	const refreshWorldState = useCallback(async () => {
+		const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		stateRefreshRequestIdRef.current = requestId;
 		setStateRefreshing(true);
+		setStateRefreshStage("prepare");
 		try {
-			const result = await apiPost<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>("/api/state/refresh", {});
+			const result = await apiPost<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>(`/api/state/refresh?requestId=${encodeURIComponent(requestId)}`, {});
 			if (result.message) pushToast(result.kind === "failed" || result.kind === "stale" ? "warning" : "info", result.message);
 		} catch (error) {
 			pushToast("error", error instanceof Error ? error.message : String(error));
 		} finally {
-			setStateRefreshing(false);
+			if (stateRefreshRequestIdRef.current === requestId) {
+				stateRefreshRequestIdRef.current = null;
+				setStateRefreshing(false);
+				setStateRefreshStage(null);
+			}
 		}
 	}, [pushToast]);
 
@@ -1393,6 +1405,9 @@ export default function App() {
 								: `${toolLabel(frame.activity.name)}…`
 							: null,
 					);
+					break;
+				case "state_refresh":
+					if (stateRefreshRequestIdRef.current === frame.requestId) setStateRefreshStage(frame.stage);
 					break;
 				case "state":
 					setWorldState(frame.state);
@@ -3776,6 +3791,20 @@ export default function App() {
 										<IconClose size={15} />
 									</button>
 								</div>
+								{rightPanel === "status" && stateRefreshing && (
+									<div className="status-refresh-stages" role="status" aria-live="polite" aria-label={t("状态刷新阶段")}>
+										{STATE_REFRESH_STAGES.map((stage, index) => {
+											const currentIndex = STATE_REFRESH_STAGES.indexOf(stateRefreshStage ?? "prepare");
+											const label = stage === "prepare" ? t("准备剧情") : stage === "analyze" ? t("场记分析中") : t("写回账本");
+											return (
+												<span key={stage} className={`status-refresh-stage${index < currentIndex ? " is-complete" : ""}${index === currentIndex ? " is-current" : ""}`} aria-current={index === currentIndex ? "step" : undefined}>
+													<span className="status-refresh-stage-dot" aria-hidden="true" />
+													{label}
+												</span>
+											);
+										})}
+									</div>
+								)}
 								<div className="stage-col-body">
 									{(() => {
 										if (rightPanel.startsWith("agent:")) {

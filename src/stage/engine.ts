@@ -823,7 +823,8 @@ export class StageEngine {
 	}
 
 	/** Reconcile the current ledger against recent completed story on this branch. */
-	async refreshState(): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }> {
+	async refreshState(onStage?: (stage: "prepare" | "analyze" | "write") => void): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }> {
+		onStage?.("prepare");
 		if (this.#busy || this.#refreshing) return { kind: "skipped", message: "当前有生成或记账任务。" };
 		const model = this.#deps.getModel();
 		if (!model) return { kind: "failed", message: "尚未配置剧情模型。" };
@@ -851,6 +852,7 @@ export class StageEngine {
 				getLeafId: () => this.#deps.getSession().sessionManager === sm ? sm.getLeafId() : null,
 				getState: () => getCurrentState(),
 				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
+				onStage,
 				onActivity: (detail) => this.#deps.events?.onActivity?.(detail),
 			}, {
 				state, userText: "", assistantText: `【当前分支最近剧情·用于状态对账】\n${context.slice(-20_000)}`,

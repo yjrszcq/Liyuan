@@ -286,6 +286,7 @@ export interface WireBtwMsg {
 	tools?: string[];
 }
 
+export type StateRefreshStage = "prepare" | "analyze" | "write";
 /** Server → Client 帧 */
 export type ServerFrame =
 	| {
@@ -344,6 +345,7 @@ export type ServerFrame =
 	| { type: "stream"; state: "clear" }
 	| { type: "agent"; state: "start" | "end" }
 	| { type: "activity"; activity: WireActivity }
+	| { type: "state_refresh"; requestId: string; stage: StateRefreshStage }
 	| { type: "state"; state: WorldState }
 	/** agent 自建面板变化（panel_write/close 落盘、rewind 回退）：活跃面板全量推送（同 state 的 fs.watch 机制） */
 	| { type: "panels"; panels: RpPanel[] }

@@ -17,6 +17,7 @@ export type {
 	WireMsg,
 	WireSessionInfo,
 	WireStats,
+	StateRefreshStage,
 	WireStoryFile,
 	WireSwipe,
 	WorldState,

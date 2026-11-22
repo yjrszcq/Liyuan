@@ -1819,7 +1819,7 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 const restHost: RestHost = {
 	cwd,
 	isStreaming: () => session.isStreaming || stage.isStreaming,
-	refreshState: () => stage.refreshState(),
+	refreshState: (requestId) => stage.refreshState(requestId ? (stageName) => broadcast({ type: "state_refresh", requestId, stage: stageName }) : undefined),
 	settleCardPreview: (report) => cardPreviews.settle(report),
 	settleScreenshot: (report) => screenshots.settle(report),
 	runCardPreview: (args) => {

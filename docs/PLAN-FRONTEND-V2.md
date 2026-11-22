@@ -132,3 +132,5 @@
 - 2026-11-22 修复状态栏长内容的内部滚动：面板在分栏/移动抽屉中成为受限滚动区，标题固定；原有「刷新状态」操作改为标题右侧刷新图标，仍调用 `/api/state/refresh`，状态仍是当前分支最新值。
 - 复审（2026-11-22）：再次构建通过；Web typecheck 仍仅报 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 诊断，修改文件无诊断。桌面和移动抽屉的内部滚动、刷新接口 200 已通过实际浏览器场景验证。
 - 状态栏标题右侧的刷新图标仅在请求期间转动，成功或失败后停止并恢复可点击。开启「减少动态效果」时不转动，以强调色和「正在刷新…」提示标明忙碌状态。
+- 手动刷新显示真实阶段「准备剧情 / 场记分析中 / 写回账本」：引擎/场记回调经带 requestId 的 WebSocket 帧更新当前步骤；不显示百分比或进度条；原 POST /api/state/refresh 语义与状态栏按钮忙碌逻辑保留。
+- 验证：`npm test` 914 项（909 通过、5 跳过），`npm run web:build` 通过；Chromium 实测三个阶段按顺序高亮、完成后收起且按钮恢复可用，无进度条。Web typecheck 仍受 `cardspace.ts`、`paths.ts`、`PersonaPanel.tsx`、`PresetPanel.tsx` 的既有错误阻断，改动文件无诊断。

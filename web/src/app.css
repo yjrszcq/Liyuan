@@ -1599,6 +1599,51 @@ html[data-theme="dark"] [data-tip]:focus-visible::after {
 	min-width: 0;
 }
 
+.status-refresh-stages {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 18px;
+	border-bottom: 1px solid var(--hairline);
+	background: var(--surface);
+	flex: none;
+}
+
+.status-refresh-stage {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-soft);
+	font-size: 11px;
+	white-space: nowrap;
+}
+
+.status-refresh-stage.is-complete {
+	color: var(--success);
+}
+
+.status-refresh-stage.is-current {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.status-refresh-stage-dot {
+	width: 6px;
+	height: 6px;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+	flex: none;
+}
+
+.status-refresh-stage.is-complete .status-refresh-stage-dot {
+	background: currentColor;
+}
+
+.status-refresh-stage.is-current .status-refresh-stage-dot {
+	background: currentColor;
+}
+
 .status-refresh-btn[aria-busy="true"] {
 	color: var(--accent);
 	cursor: wait;

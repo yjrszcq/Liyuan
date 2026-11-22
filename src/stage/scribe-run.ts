@@ -31,6 +31,7 @@ export interface ScribeRunDeps {
 	/** Current branch-derived state for edits made while the side call is in flight. */
 	getState?: () => WorldState;
 	onActivity?: (detail: string) => void;
+	onStage?: (stage: "analyze" | "write") => void;
 }
 
 interface ScribeRunInput {
@@ -71,6 +72,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 		.filter(([, tree]) => tree && typeof tree === "object" && Object.keys(tree).length > 0)
 		.map(([name, tree]) => ({ name, tree }));
 	const prompt = buildScribeTurnPrompt({ state, userText, assistantText, charName, userName, mvu, panels, reconcile });
+	deps.onStage?.("analyze");
 	const resp = await deps.sideText(prompt.systemPrompt, prompt.userText);
 	if (typeof resp !== "string") return { kind: "failed", error: resp.error };
 
@@ -93,6 +95,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 		deps.onActivity?.("记账已丢弃（调用期间分支或状态发生变化）");
 		return { kind: "stale" };
 	}
+	deps.onStage?.("write");
 
 	const knownNames = [charName, userName, ...Object.keys(state.characters)];
 	const result = applyPatch(state, canonicalizeCharacterKeys(parsed.patch, knownNames));

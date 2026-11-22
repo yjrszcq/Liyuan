@@ -51,8 +51,11 @@ export const sessions: Record<string, string> = {
 	"保存": "Save",
 	// 会话面板
 	"刷新状态": "Refresh status",
-	"按当前剧情对账状态；不会再次增加好感": "Reconcile status against the current branch without applying affinity changes twice",
 	"正在刷新…": "Refreshing…",
+	"状态刷新阶段": "Status refresh stages",
+	"准备剧情": "Preparing story",
+	"场记分析中": "Scribe analyzing",
+	"写回账本": "Writing to ledger",
 	"未命名项目": "Untitled project",
 	"{month}月{day}日 {time}": "{month}/{day} {time}",
 	"新建项目（{n}）": "New project ({n})",
