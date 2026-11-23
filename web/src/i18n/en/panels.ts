@@ -192,4 +192,6 @@ export const panels: Record<string, string> = {
 	"待确认的状态提案": "State proposal awaiting confirmation",
 	"依据": "Evidence",
 	"确认应用修改": "Confirm and apply changes",
+	"已应用": "Applied",
+	"修改已写入分支，但已应用标记保存失败": "The change was saved to the branch, but the applied marker could not be saved",
 };

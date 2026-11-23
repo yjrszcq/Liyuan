@@ -6,7 +6,8 @@ import { SessionManager } from "@liyuan/agent-runtime";
 export type RepairChatMessage = {
 	role: "user" | "assistant";
 	text: string;
-	proposal?: { token: string; changes: unknown[]; evidence: unknown[] };
+	thinking?: string;
+	proposal?: { token: string; changes: unknown[]; evidence: unknown[]; applied?: boolean };
 };
 
 export type RepairChat = {
@@ -52,6 +53,16 @@ export function deleteRepairChat(cwd: string, sessionId: string, id: string, new
   const chats = listRepairChats(cwd, sessionId, newChatTitle);
   if (!chats.some((chat) => chat.id === id)) return false;
   saveRepairChats(cwd, sessionId, chats.filter((chat) => chat.id !== id));
+  return true;
+}
+/** Mark only the matching proposal as applied; returns false if its chat or token disappeared. */
+export function markRepairProposalApplied(cwd: string, sessionId: string, chatId: string, token: string, newChatTitle: string): boolean {
+  const chats = listRepairChats(cwd, sessionId, newChatTitle);
+  const chat = chats.find((item) => item.id === chatId);
+  const message = chat?.messages.find((item) => item.proposal?.token === token);
+  if (!message?.proposal) return false;
+  message.proposal.applied = true;
+  saveRepairChats(cwd, sessionId, chats);
   return true;
 }
 

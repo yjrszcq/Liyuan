@@ -947,7 +947,7 @@ export class StageEngine {
 		});
 	}
 
-  async proposeStateRepair(chatId: string, instruction: string, history: Array<{ role: "user" | "assistant"; text: string }>): Promise<StateRepairParseResult> {
+  async proposeStateRepair(chatId: string, instruction: string, history: Array<{ role: "user" | "assistant"; text: string }>, onDelta?: (kind: "thinking" | "text", delta: string) => void): Promise<StateRepairParseResult> {
 		if (this.#busy || this.#refreshing) return { kind: "invalid", reason: "当前有生成或记账任务。" };
 		const text = instruction.trim();
 		if (!text || text.length > STATE_REPAIR_INSTRUCTION_MAX) return { kind: "invalid", reason: `请填写 1–${STATE_REPAIR_INSTRUCTION_MAX} 字符的纠错说明。` };
@@ -983,7 +983,7 @@ export class StageEngine {
       const instructionSources = history.filter((message) => message.role === "user").map((message) => message.text);
       const allInstructions = instructionSources.join("\n");
       const prompt = buildStateRepairPrompt({ state, instruction: allInstructions || text, history, story, charName: materials.card.name, userName: materials.config.userName, mvuRules: state.mvu ? findMvuRules(materials.card.book) : undefined, additionalPrompt: this.#deps.getRepairPrompt?.() });
-			const response = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, "scribe");
+			const response = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, "scribe", undefined, onDelta);
 			if (typeof response !== "string") return { kind: "invalid", reason: response.error };
       if (this.#deps.getSession() !== session || sm.getSessionId() !== sessionId || sm.getLeafId() !== leafBefore || JSON.stringify(this.#repairBaseline(sm.getBranch() as BranchEntryLike[], sessionId, sm.getEntries() as BranchEntryLike[])) !== JSON.stringify(rawState)) {
 				return { kind: "invalid", reason: "修复分析期间分支或状态发生变化，请重新提交。" };
@@ -2804,7 +2804,7 @@ export class StageEngine {
 
 	// M-A 起 #revise 精修旁路退役（8/10 验收整体退役，revise.ts 已删除）。
 
-	/** 旁路文本调用（场记/压缩用）：静默收集，不外发增量；失败返回 {error} */
+	/** 旁路文本调用：默认静默收集；可选回调转发实际思考/正文增量，失败返回 {error} */
 	async #sideText(
 		model: StageModelLike,
 		systemPrompt: string,
@@ -2812,11 +2812,8 @@ export class StageEngine {
 		auth: { apiKey?: string; headers?: Record<string, string | null> },
 		kind: SideTextStat["kind"] = "scribe",
 		reasoning: string | undefined = "off",
+		onDelta?: (kind: "thinking" | "text", delta: string) => void,
 	): Promise<string | { error: string }> {
-		/**
-		 * 旁路走哪条条目只有这一个主人：配了旁路条目就走它，没配就跟随剧情模型（入参那个）。
-		 * 两个调用点（场记 / 压缩）因此不必各自判一遍。
-		 */
 		const side = this.#deps.getSideEntry?.();
 		const chosen = side?.model ?? model;
 		const maxTokens = typeof chosen.maxTokens === "number" && Number.isFinite(chosen.maxTokens) && chosen.maxTokens > 0
@@ -2892,7 +2889,10 @@ export class StageEngine {
 				let final: AssistantMsgLike | null = null;
 				let errMsg: string | undefined;
 				for await (const e of s) {
-					if (e.type === "thinking_delta") thinkChars += (e.delta ?? "").length;
+					if (e.type === "thinking_delta") {
+						thinkChars += (e.delta ?? "").length;
+						if (e.delta) onDelta?.("thinking", e.delta);
+					} else if (e.type === "text_delta" && e.delta) onDelta?.("text", e.delta);
 					else if (e.type === "done") final = e.message ?? null;
 					else if (e.type === "error") {
 						errMsg = e.error?.errorMessage || `stopReason=${e.error?.stopReason ?? "?"}`;

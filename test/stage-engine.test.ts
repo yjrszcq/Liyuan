@@ -191,13 +191,16 @@ test("状态修复：提案确认后写入当前分支，并只允许一次无�
 	try {
 		reg.setResponses([
 			...directBeat("我把怀表还给沈舟，她收进袖中。"),
-			fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] })),
+			fauxAssistantMessage([fauxThinking("先核对证据。"), { type: "text", text: JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] }) }]),
 		]);
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
 		await engine.performTurn("我交还怀表。");
 		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
-    const proposal = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }]);
+		const repairDeltas: Array<["thinking" | "text", string]> = [];
+    const proposal = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }], (kind, delta) => repairDeltas.push([kind, delta]));
 		assert.equal(proposal.kind, "proposal");
+		assert.ok(repairDeltas.some(([kind, delta]) => kind === "thinking" && delta.includes("先核对证据")));
+		assert.ok(repairDeltas.some(([kind, delta]) => kind === "text" && delta.includes('"patch"')));
 		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
     assert.equal(engine.applyStateRepair("another-chat", proposal.token).ok, false, "proposal token cannot be applied from another modification chat");
 		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.before, ["怀表"]);

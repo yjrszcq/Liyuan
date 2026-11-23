@@ -323,7 +323,8 @@ export interface RestHost {
   repairChats(): { chats: Array<{ id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string; proposal?: { token: string; changes: unknown[]; evidence: unknown[] } }> }> };
   createRepairChat(expectedSessionId: string): { chat: { id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string }> } };
   deleteRepairChat(id: string, expectedSessionId: string): { ok: true };
-  repairTurn(id: string, text: string, expectedSessionId: string): Promise<unknown>;
+  renameRepairChat(id: string, title: string, expectedSessionId: string): { chat: { id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string }> } };
+  repairTurn(id: string, text: string, expectedSessionId: string, onDelta?: (kind: "thinking" | "text", delta: string) => void): Promise<unknown>;
   applyRepairChat(id: string, token: string, expectedSessionId: string): unknown;
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
 	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
@@ -3445,6 +3446,15 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
         sendJson(res, 200, host.createRepairChat(body.sessionId));
         return true;
       }
+      case "PUT /api/state/repair/chats": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; title?: unknown; sessionId?: unknown };
+        if (typeof body.id !== "string" || !body.id) throw new Error(t("缺少修改会话 id"));
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        if (typeof body.title !== "string" || !body.title.trim()) throw new Error(t("标题不能为空"));
+        sendJson(res, 200, host.renameRepairChat(body.id, body.title.trim(), body.sessionId));
+        return true;
+      }
       case "DELETE /api/state/repair/chats": {
         if (refuseWhileStreaming()) return true;
         const id = query.get("id");
@@ -3460,6 +3470,22 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
         if (typeof body.id !== "string" || typeof body.text !== "string") throw new Error(t("缺少修改会话或消息"));
         if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
         sendJson(res, 200, await host.repairTurn(body.id, body.text, body.sessionId));
+        return true;
+      }
+      case "POST /api/state/repair/turn/stream": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown };
+        if (typeof body.id !== "string" || typeof body.text !== "string") throw new Error(t("缺少修改会话或消息"));
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no" });
+        const emit = (event: unknown) => { if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`); };
+        try {
+          const result = await host.repairTurn(body.id, body.text, body.sessionId, (kind, delta) => emit({ type: "delta", kind, delta }));
+          emit({ type: "result", result });
+        } catch (error) {
+          emit({ type: "error", error: error instanceof Error ? error.message : String(error) });
+        }
+        res.end();
         return true;
       }
       case "POST /api/state/repair/apply": {

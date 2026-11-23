@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { SessionManager } from "@liyuan/agent-runtime";
 import { defaultState } from "../src/state.ts";
-import { createRepairChat, deleteRepairChat, deleteRepairChatsForSessionPath, listRepairChats, saveRepairChats } from "../src/state-repair-chats.ts";
+import { createRepairChat, deleteRepairChat, deleteRepairChatsForSessionPath, listRepairChats, markRepairProposalApplied, saveRepairChats } from "../src/state-repair-chats.ts";
 import { buildStateRepairPrompt, parseStateRepairResult } from "../src/state-repair.ts";
 
 test("repair chats persist per parent session, delete independently, and cascade using generated session files", () => {
@@ -43,6 +43,33 @@ test("repair chats persist per parent session, delete independently, and cascade
     const missingSessionPath = join(sessionsDir, "missing.jsonl");
     deleteRepairChatsForSessionPath(cwd, missingSessionPath);
     assert.equal(existsSync(missingSessionPath), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("applied status is persisted only on the matching proposal and leaves older proposals pending", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "liyuan-repair-applied-"));
+  try {
+    const sessionId = "parent-session";
+    const chats = [
+      { id: "chat-a", title: "A", messages: [
+        { role: "assistant" as const, text: "old proposal", proposal: { token: "old-token", changes: [], evidence: [] } },
+        { role: "assistant" as const, text: "new proposal", thinking: "actual model reasoning", proposal: { token: "new-token", changes: [], evidence: [] } },
+      ] },
+      { id: "chat-b", title: "B", messages: [
+        { role: "assistant" as const, text: "other proposal", proposal: { token: "other-token", changes: [], evidence: [] } },
+      ] },
+    ];
+    saveRepairChats(cwd, sessionId, chats);
+
+    assert.equal(markRepairProposalApplied(cwd, sessionId, "chat-a", "new-token", "New chat"), true);
+    assert.equal(markRepairProposalApplied(cwd, sessionId, "chat-a", "missing-token", "New chat"), false);
+    const saved = listRepairChats(cwd, sessionId, "New chat");
+    assert.equal(saved[0]?.messages[0]?.proposal?.applied, undefined);
+    assert.equal(saved[0]?.messages[1]?.proposal?.applied, true);
+    assert.equal(saved[0]?.messages[1]?.thinking, "actual model reasoning");
+    assert.equal(saved[1]?.messages[0]?.proposal?.applied, undefined);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
