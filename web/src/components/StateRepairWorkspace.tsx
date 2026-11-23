@@ -194,7 +194,7 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
         return <div key={`${activeChat.id}-${index}`} className={`repair-message-row repair-row-${message.role}`}>
         <article className={`repair-message repair-${message.role}`}>
         {message.thinking && <ThinkingBlock text={message.thinking} />}
-        {editing?.index === index && message.role === "user" ? <textarea autoFocus className="repair-edit-input" value={editing.text} disabled={busy} onChange={(event) => setEditing({ index, text: event.target.value })} /> : message.text && <div className="repair-message-text">{message.role === "assistant" ? renderMarkdown(message.text) : message.text}</div>}
+        {editing?.index === index && message.role === "user" ? <textarea autoFocus className="repair-edit-input" value={editing.text} disabled={busy} onChange={(event) => setEditing({ index, text: event.target.value })} /> : message.text && <div className="repair-message-text">{renderMarkdown(message.text)}</div>}
         {message.proposal && <section className="repair-proposal"><strong>{t("待确认的状态提案")}</strong><ul>{message.proposal.changes.map((change, i) => <li key={`${change.path}-${i}`}><code>{change.path}</code><div><del>{JSON.stringify(change.before)}</del><span> → </span><ins>{JSON.stringify(change.after)}</ins></div></li>)}</ul>
           {message.proposal.evidence?.length > 0 && <div className="repair-evidence"><strong>{t("依据")}</strong>{message.proposal.evidence.map((item, i) => <blockquote key={i}><span>{item.source === "story" ? t("剧情证据") : item.source === "instruction" ? t("指令依据") : item.source}</span>{item.quote}</blockquote>)}</div>}
           <button className="drawer-btn primary" type="button" disabled={busy || message.proposal.applied || message.proposal.expired} onClick={() => void apply(message.proposal!.token)}>{message.proposal.applied ? t("已应用") : message.proposal.expired ? t("已失效") : t("确认应用修改")}</button></section>}
@@ -211,10 +211,10 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
         </div>
       </div>; })}
       {pending && pending.id === chatId && <>
-        <article className="repair-message repair-user"><div className="repair-message-text">{pending.text}</div></article>
+        <article className="repair-message repair-user"><div className="repair-message-text">{renderMarkdown(pending.text)}</div></article>
         <article className="repair-message repair-assistant">
           {pending.thinking && <ThinkingBlock text={pending.thinking} live={!pending.reply} />}
-          {pending.reply ? <details className="thinking"><summary>{t("回复")}</summary><div className="thinking-body">{pending.reply}</div></details> : <div className="info-line pulse">{t("正在核对剧情…")}</div>}
+          {pending.reply ? <details className="thinking"><summary>{t("回复")}</summary><div className="thinking-body repair-message-text">{renderMarkdown(pending.reply)}</div></details> : <div className="info-line pulse">{t("正在核对剧情...")}</div>}
         </article>
       </>}
     </div>
