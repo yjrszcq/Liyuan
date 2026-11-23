@@ -196,18 +196,19 @@ test("状态修复：提案确认后写入当前分支，并只允许一次无�
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
 		await engine.performTurn("我交还怀表。");
 		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
-		const proposal = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+    const proposal = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }]);
 		assert.equal(proposal.kind, "proposal");
 		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
+    assert.equal(engine.applyStateRepair("another-chat", proposal.token).ok, false, "proposal token cannot be applied from another modification chat");
 		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.before, ["怀表"]);
 		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.after, []);
 		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
-		assert.equal(engine.applyStateRepair(proposal.token).ok, false, "even a same-value new state snapshot invalidates the proposal leaf");
+    assert.equal(engine.applyStateRepair("test-chat", proposal.token).ok, false, "even a same-value new state snapshot invalidates the proposal leaf");
 		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] }))] as never);
-		const fresh = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+    const fresh = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }]);
 		assert.equal(fresh.kind, "proposal");
 		if (fresh.kind !== "proposal" || !("token" in fresh)) return;
-		const applied = engine.applyStateRepair(fresh.token);
+    const applied = engine.applyStateRepair("test-chat", fresh.token);
 		assert.equal(applied.ok, true);
 		const appliedLeaf = sm.getLeafId()!;
 		assert.ok(applied.undoToken);
@@ -248,11 +249,11 @@ test("状态修复：缓存写入失败时仍如实报告已提交的分支状�
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => failCache ? cwd : undefined);
 		await engine.performTurn("我交还怀表。");
 		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
-		const proposal = await engine.proposeStateRepair("怀表已经还给沈舟，请从账本移除。");
+    const proposal = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }]);
 		assert.equal(proposal.kind, "proposal");
 		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
 		failCache = true;
-		const applied = engine.applyStateRepair(proposal.token);
+    const applied = engine.applyStateRepair("test-chat", proposal.token);
 		assert.equal(applied.ok, true);
 		assert.equal(applied.warning, true);
 		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, []);
@@ -282,16 +283,16 @@ test("状态修复：旧会话仅有磁盘账本时保留未修正字段，且�
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => file);
 		const response = () => fauxAssistantMessage(JSON.stringify({ patch: { location: "新桥" }, evidence: [{ source: "instruction", quote: "位置应为新桥" }] }));
 		reg.setResponses([response(), response()]);
-		const stale = await engine.proposeStateRepair("位置应为新桥");
+    const stale = await engine.proposeStateRepair("test-chat", "位置应为新桥", [{ role: "user", text: "位置应为新桥" }]);
 		assert.equal(stale.kind, "proposal");
 		if (stale.kind !== "proposal" || !("token" in stale)) throw new Error("missing proposal");
 		cached.inventory.push("纸伞");
 		saveState(file, cached);
-		assert.equal(engine.applyStateRepair(stale.token).ok, false);
-		const fresh = await engine.proposeStateRepair("位置应为新桥");
+    assert.equal(engine.applyStateRepair("test-chat", stale.token).ok, false);
+    const fresh = await engine.proposeStateRepair("test-chat", "位置应为新桥", [{ role: "user", text: "位置应为新桥" }]);
 		assert.equal(fresh.kind, "proposal");
 		if (fresh.kind !== "proposal" || !("token" in fresh)) throw new Error("missing proposal");
-		const applied = engine.applyStateRepair(fresh.token);
+    const applied = engine.applyStateRepair("test-chat", fresh.token);
 		assert.deepEqual(loadState(file), { ...cached, location: "新桥" });
 		assert.ok(applied.undoToken);
 		assert.equal(engine.undoStateRepair(applied.undoToken).ok, true);
@@ -314,12 +315,12 @@ test("状态修复：无当前分支快照时不继承有快照的 sibling 缓�
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"), {}, () => file);
 		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { location: "新地点" }, evidence: [{ source: "instruction", quote: "位置应为新地点" }] }))] as never);
 
-		const proposal = await engine.proposeStateRepair("位置应为新地点");
+    const proposal = await engine.proposeStateRepair("test-chat", "位置应为新地点", [{ role: "user", text: "位置应为新地点" }]);
 		assert.equal(proposal.kind, "proposal");
 		if (proposal.kind !== "proposal" || !("token" in proposal)) throw new Error("missing proposal");
 		assert.deepEqual(proposal.changes.map((change) => change.path), ["location"]);
 		assert.equal(proposal.changes[0]?.before, "");
-		assert.equal(engine.applyStateRepair(proposal.token).ok, true);
+    assert.equal(engine.applyStateRepair("test-chat", proposal.token).ok, true);
 		assert.deepEqual(stateFromBranch(sm.getBranch() as BranchEntryLike[]).inventory, []);
 		assert.equal(stateFromBranch(sm.getBranch() as BranchEntryLike[]).location, "新地点");
 	} finally {
@@ -338,11 +339,11 @@ test("状态修复：不把尚未写入账本的卡初始 MVU 树隐式提交", 
 		writeFileSync(cardPath, JSON.stringify(card));
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
 		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { location: "新地点" }, evidence: [{ source: "instruction", quote: "位置应为新地点" }] }))] as never);
-		const proposal = await engine.proposeStateRepair("位置应为新地点");
+    const proposal = await engine.proposeStateRepair("test-chat", "位置应为新地点", [{ role: "user", text: "位置应为新地点" }]);
 		assert.equal(proposal.kind, "proposal");
 		if (proposal.kind !== "proposal" || !("token" in proposal)) throw new Error("missing proposal");
 		assert.deepEqual(proposal.changes.map((change) => change.path), ["location"]);
-		assert.equal(engine.applyStateRepair(proposal.token).ok, true);
+    assert.equal(engine.applyStateRepair("test-chat", proposal.token).ok, true);
 		assert.equal(Object.hasOwn(stateFromBranch(sm.getBranch() as BranchEntryLike[]), "mvu"), false);
 	} finally {
 		reg.unregister();
@@ -356,7 +357,7 @@ test("状态修复：旧写作分支会隐藏状态快照时拒绝生成提案",
 	try {
 		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
 		sm.appendMessage({ role: "user", content: "请调整旧写作分支", timestamp: Date.now(), details: { liyuanMode: "authoring" } });
-		const result = await engine.proposeStateRepair("修正当前账本。");
+    const result = await engine.proposeStateRepair("test-chat", "修正当前账本。", [{ role: "user", text: "修正当前账本。" }]);
 		assert.equal(result.kind, "invalid");
 		if (result.kind === "invalid") assert.match(result.reason, /隐藏状态快照/);
 		assert.equal(engine.stateRepairStatus().undoable, false);

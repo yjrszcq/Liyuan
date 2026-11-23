@@ -1830,6 +1830,14 @@ export function ConnectPanel({
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
 	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
 
+const repairModel = rpConfig.data?.config?.repairModel ?? null;
+const saveRepairModel = (enabled: boolean) => run(async () => {
+  const model = enabled && activeConfig.defaultProvider && activeConfig.defaultModelEntry
+    ? { provider: activeConfig.defaultProvider, entry: activeConfig.defaultModelEntry }
+    : null;
+  await apiPut("/api/config", { repairModel: model });
+  rpConfig.reload();
+}, enabled ? t("状态修改模型已开启") : t("状态修改模型将跟随主模型"));
 	const reloadAll = () => {
 		modelsData.reload();
 		agentCfg.reload();
@@ -1929,6 +1937,11 @@ export function ConnectPanel({
 			</section>
 
 			{/* 下半区：所有模型（无选中勾，点击整行直接在右侧展开模型详情） */}
+<section className="sp-section conn-block">
+  <div className="conn-head-row"><span className="conn-section-label">{t("状态修改模型")}</span></div>
+  <label className="repair-model-setting"><span>{t("模型使用方式")}</span><select disabled={busy} value={repairModel ? "enabled" : "follow"} onChange={(event) => saveRepairModel(event.target.value === "enabled")}><option value="follow">{t("跟随主模型")}</option><option value="enabled" disabled={!activeConfig.defaultProvider || !activeConfig.defaultModelEntry}>{t("已开启")}</option></select></label>
+  <small>{t("已开启时使用模型配置中当前选中的模型")}</small>
+</section>
 			<section className="sp-section conn-block">
 				<div className="conn-head-row">
 					<span className="conn-section-label">{t("所有模型")}（{allItems.length}）</span>

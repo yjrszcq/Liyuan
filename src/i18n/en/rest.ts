@@ -201,5 +201,8 @@ export const rest: Record<string, string> = {
 	"已从回收站真删 {n} 个文件": "Permanently deleted {n} file from the recycle bin|Permanently deleted {n} files from the recycle bin",
 	"已按快照写回素材（比快照多出来的文件进了回收站）": "Assets written back from the snapshot (files not in it went to the recycle bin)",
 	"聊天记录内容为空": "The chat log is empty",
+  "缺少扮演会话 id": "Missing roleplay session id",
+  "缺少修改会话 id": "Missing state-modification chat id",
+  "缺少修改会话或消息": "State-modification chat id and message are required",
 	"未知接口：{route}": "Unknown endpoint: {route}",
 };

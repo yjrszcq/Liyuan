@@ -224,7 +224,11 @@ export interface RpConfig {
 	 * 旁路助手专用模型：指向连接配置里的一条模型条目（provider + 条目名）。
 	 * 缺省 = 跟随剧情主模型。思考档跟着条目走。
 	 */
-	btwModel?: { provider: string; entry: string };
+  btwModel?: { provider: string; entry: string };
+  /** 状态修改 Agent 的模型条目；未配置时跟随剧情主模型。 */
+  repairModel?: { provider: string; entry: string } | null;
+  /** 仅追加在内置安全提示之后的状态修改工作方式补充。 */
+  repairPrompt?: string;
 }
 
 /** 旁路助手性格设定模板条目 */
@@ -246,6 +250,8 @@ export const DEFAULT_CONFIG: RpConfig = {
 	greeting: true,
 	backendControl: true,
 	compactEveryNTurns: 30,
+  repairModel: null,
+  repairPrompt: "",
 };
 
 /** 宏替换上下文 */

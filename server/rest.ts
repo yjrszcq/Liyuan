@@ -318,11 +318,12 @@ export interface RestHost {
 	deleteCardSessions(cardRel: string): Promise<number>;
 	readSessionFile(path: string): Promise<string>;
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
-	/** 由当前分支上下文提出、确认、撤销状态修复。 */
-	proposeStateRepair(instruction: string): Promise<unknown>;
-	applyStateRepair(token: string): unknown;
-	stateRepairStatus(): unknown;
-	undoStateRepair(token: string): unknown;
+  /** Client-supplied parent ID is an expectation only; main validates it against the active session. */
+  repairChats(): { chats: Array<{ id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string; proposal?: { token: string; changes: unknown[]; evidence: unknown[] } }> }> };
+  createRepairChat(expectedSessionId: string): { chat: { id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string }> } };
+  deleteRepairChat(id: string, expectedSessionId: string): { ok: true };
+  repairTurn(id: string, text: string, expectedSessionId: string): Promise<unknown>;
+  applyRepairChat(id: string, token: string, expectedSessionId: string): unknown;
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
 	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
 	retryPendingScribes(): Promise<{ kind: "applied" | "skipped" | "failed"; message?: string; pendingCount: number }>;
@@ -529,8 +530,10 @@ const CONFIG_EDITABLE = new Set([
 	"btwName",
 	"btwAvatar",
 	"btwPersona",
+  "btwModel",
 	"btwPersonaTemplates",
-	"btwModel",
+  "repairModel",
+  "repairPrompt",
 ]);
 
 export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown>): RpConfig {
@@ -630,6 +633,14 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 			next.btwModel = { provider: bm.provider.trim(), entry: bm.entry.trim() };
 		}
 	}
+  if (next.repairModel !== undefined) {
+    const rm = next.repairModel as { provider?: unknown; entry?: unknown } | null;
+    if (rm === null) delete next.repairModel;
+    else if (!rm || typeof rm !== "object" || typeof rm.provider !== "string" || !rm.provider.trim() || typeof rm.entry !== "string" || !rm.entry.trim()) delete next.repairModel;
+    else next.repairModel = { provider: rm.provider.trim(), entry: rm.entry.trim() };
+  }
+  if (next.repairPrompt !== undefined && typeof next.repairPrompt !== "string") delete next.repairPrompt;
+  if (typeof next.repairPrompt === "string") next.repairPrompt = next.repairPrompt.slice(0, 20_000);
 	// 旁路助手性格模板列表：允许保存空数组 []（代表用户删空了全部模板）；null/空串已在上方删除键（恢复内置默认）
 	if (next.btwPersonaTemplates !== undefined) {
 		if (!Array.isArray(next.btwPersonaTemplates)) {
@@ -3425,20 +3436,42 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, r);
 				return true;
 			}
-			case "POST /api/state/repair": {
-				if (refuseWhileStreaming()) return true;
-				const body = JSON.parse(await readBody(req)) as { instruction?: unknown };
-				if (typeof body.instruction !== "string") throw new Error(t("缺少纠错说明"));
-				sendJson(res, 200, await host.proposeStateRepair(body.instruction));
-				return true;
-			}
-			case "POST /api/state/repair/apply": {
-				if (refuseWhileStreaming()) return true;
-				const body = JSON.parse(await readBody(req)) as { token?: unknown };
-				if (typeof body.token !== "string") throw new Error(t("修复提案已失效"));
-				sendJson(res, 200, host.applyStateRepair(body.token));
-				return true;
-			}
+      case "GET /api/state/repair/chats": {
+        sendJson(res, 200, host.repairChats());
+        return true;
+      }
+      case "POST /api/state/repair/chats": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { sessionId?: unknown };
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        sendJson(res, 200, host.createRepairChat(body.sessionId));
+        return true;
+      }
+      case "DELETE /api/state/repair/chats": {
+        if (refuseWhileStreaming()) return true;
+        const id = query.get("id");
+        const sessionId = query.get("sessionId");
+        if (!id) throw new Error(t("缺少修改会话 id"));
+        if (!sessionId) throw new Error(t("缺少扮演会话 id"));
+        sendJson(res, 200, host.deleteRepairChat(id, sessionId));
+        return true;
+      }
+      case "POST /api/state/repair/turn": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown };
+        if (typeof body.id !== "string" || typeof body.text !== "string") throw new Error(t("缺少修改会话或消息"));
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        sendJson(res, 200, await host.repairTurn(body.id, body.text, body.sessionId));
+        return true;
+      }
+      case "POST /api/state/repair/apply": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; token?: unknown; sessionId?: unknown };
+        if (typeof body.id !== "string" || typeof body.token !== "string") throw new Error(t("修复提案已失效"));
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        sendJson(res, 200, host.applyRepairChat(body.id, body.token, body.sessionId));
+        return true;
+      }
 			case "GET /api/state/repair/status": {
 				sendJson(res, 200, host.stateRepairStatus());
 				return true;

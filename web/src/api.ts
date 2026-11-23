@@ -334,6 +334,8 @@ export interface RpConfigView {
 	compactEveryNTurns?: number;
 	/** 旁路模型（记账/压缩）：指向连接配置里的一条模型条目；缺省=跟随剧情模型 */
 	sideModel?: { provider: string; entry: string };
+	repairModel?: { provider: string; entry: string } | null;
+	repairPrompt?: string;
 }
 
 export interface CardResponse {

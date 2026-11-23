@@ -18,6 +18,7 @@ import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createRepairChat as createPersistentRepairChat, deleteRepairChat as deletePersistentRepairChat, deleteRepairChatsForSessionPath, listRepairChats, saveRepairChats } from "../src/state-repair-chats.ts";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
@@ -1817,19 +1818,57 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 		maxTokens: typeof m.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : undefined,
 	};
 };
-
+const assertRepairParentSession = (expectedSessionId: string): string => {
+  const activeSessionId = session.sessionManager.getSessionId();
+  if (!expectedSessionId || expectedSessionId !== activeSessionId) throw new Error(t("扮演会话已切换，请刷新状态修改会话列表后重试。"));
+  return activeSessionId;
+};
 const restHost: RestHost = {
 	cwd,
 	isStreaming: () => session.isStreaming || stage.isStreaming,
-	proposeStateRepair: (instruction) => stage.proposeStateRepair(instruction),
-	applyStateRepair: (token) => {
-		const result = stage.applyStateRepair(token);
-		if (result.ok && result.state) {
-			syncStoryState(result.state);
-			broadcast({ type: "state", state: currentState() });
-		}
-		return result;
-	},
+  repairChats: () => ({ chats: listRepairChats(cwd, session.sessionManager.getSessionId(), t("新建状态修改")) }),
+  createRepairChat: (expectedSessionId) => ({ chat: createPersistentRepairChat(cwd, assertRepairParentSession(expectedSessionId), t("新建状态修改")) }),
+  deleteRepairChat: (id, expectedSessionId) => {
+    const sessionId = assertRepairParentSession(expectedSessionId);
+    if (!deletePersistentRepairChat(cwd, sessionId, id, t("新建状态修改"))) throw new Error(t("状态修改会话不存在。"));
+    return { ok: true as const };
+  },
+  repairTurn: async (id, text, expectedSessionId) => {
+    const sessionId = assertRepairParentSession(expectedSessionId);
+    const chats = listRepairChats(cwd, sessionId, t("新建状态修改"));
+    const chat = chats.find((item) => item.id === id);
+    if (!chat) throw new Error(t("状态修改会话不存在。"));
+    const message = text.trim();
+    if (!message || message.length > 2_000) throw new Error(t("请填写 1–{max} 字符的状态修改说明。", { max: 2_000 }));
+    chat.messages.push({ role: "user", text: message });
+    if (chat.messages.length === 1) chat.title = message.slice(0, 48);
+    saveRepairChats(cwd, sessionId, chats);
+    const history = chat.messages.filter((item) => item.role === "user" || item.role === "assistant").map(({ role, text: content }) => ({ role, text: content }));
+    const result = await stage.proposeStateRepair(id, message, history);
+    if (session.sessionManager.getSessionId() !== sessionId) return { kind: "invalid", reason: t("剧情会话已切换，本次提案未保存。") };
+    const latest = listRepairChats(cwd, sessionId, t("新建状态修改"));
+    const target = latest.find((item) => item.id === id);
+    if (!target) return { kind: "invalid", reason: t("状态修改会话已删除，本次提案未保存。") };
+    if (result.kind === "proposal") {
+      const token = (result as typeof result & { token: string }).token;
+      target.messages.push({ role: "assistant", text: t("已生成状态修改提案，请核对差异与证据后确认应用。"), proposal: { token, changes: result.changes, evidence: result.repair.evidence } });
+    } else {
+      target.messages.push({ role: "assistant", text: result.kind === "clarification" ? result.question : result.reason });
+    }
+    saveRepairChats(cwd, sessionId, latest);
+    return { chat: target };
+  },
+  applyRepairChat: (id, token, expectedSessionId) => {
+    const sessionId = assertRepairParentSession(expectedSessionId);
+    const chat = listRepairChats(cwd, sessionId, t("新建状态修改")).find((item) => item.id === id);
+    if (!chat || !chat.messages.some((message) => message.proposal?.token === token)) return { ok: false, reason: t("修复提案已失效，请重新分析。") };
+    const result = stage.applyStateRepair(id, token);
+    if (result.ok && result.state) {
+      syncStoryState(result.state);
+      broadcast({ type: "state", state: currentState() });
+    }
+    return result;
+  },
 	stateRepairStatus: () => stage.stateRepairStatus(),
 	undoStateRepair: (token) => {
 		const result = stage.undoStateRepair(token);
@@ -2173,7 +2212,8 @@ const restHost: RestHost = {
 		const space = resolveCardSpace(cwd, cardPath);
 		if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 		const cardDir = space.dir;
-		const targetDir = chatDirOf(cardDir, chatId);
+    const targetDir = chatDirOf(cardDir, chatId);
+    
 		if (!existsSync(targetDir)) throw new Error(t("子项目不存在：{id}", { id: chatId }));
 
 		// 1. 若删除的是当前打开的子项目：先切到其它项目，或建新项目切过去
@@ -2197,7 +2237,9 @@ const restHost: RestHost = {
 			}
 		}
 
-		// 2. 物理删除整个子项目目录（正文、历史、会话、状态、面板、向量记忆、项目资产）
+    for (const child of chatSessionsOf(cwd, cardPath) ?? []) {
+      if (child.chatId === chatId) deleteRepairChatsForSessionPath(cwd, child.path);
+    }
 		rmSync(targetDir, { recursive: true, force: true });
 
 		// 3. 广播会话树刷新
@@ -2240,7 +2282,8 @@ const restHost: RestHost = {
 	async deleteSession(path) {
 		await assertListedSession(path);
 		if (session.sessionFile === path) throw new Error(t("不能删除当前打开的会话（先切到其他会话再删）"));
-		unlinkSync(path);
+    deleteRepairChatsForSessionPath(cwd, path);
+    unlinkSync(path);
 		cardCache.delete(path);
 		previewCache.delete(path);
 		// 会话文件被删后，触发记忆同步（子项目指纹变动，更新复盘）
@@ -2252,7 +2295,10 @@ const restHost: RestHost = {
 	// DELETE /api/cards 直接删卡文件夹完成，这里无事可做（返回 0 不撒谎——
 	// 老语义数的是会话文件数，此处由删除端点自己报子项目数）。
 	async deleteCardSessions(cardRel) {
-		if (resolveCardSpace(cwd, cardRel)) return 0;
+    if (resolveCardSpace(cwd, cardRel)) {
+      for (const child of chatSessionsOf(cwd, cardRel) ?? []) deleteRepairChatsForSessionPath(cwd, child.path);
+      return 0;
+    }
 		const all = await SessionManager.list(cwd);
 		let n = 0;
 		for (const s of all) {
@@ -2261,7 +2307,8 @@ const restHost: RestHost = {
 			const info = readSessionCard(s.path, mtime);
 			if (!info || !sameCardPath(info.card, cardRel, cwd)) continue;
 			try {
-				unlinkSync(s.path);
+        deleteRepairChatsForSessionPath(cwd, s.path);
+        unlinkSync(s.path);
 				cardCache.delete(s.path);
 				previewCache.delete(s.path);
 				n += 1;
@@ -2776,7 +2823,18 @@ stage = new StageEngine({
 		if (!result) throw new Error(t("模型 {model} 没有可用鉴权", { model: `${m.provider}/${m.id}` }));
 		return result.auth;
 	},
-	// 旁路条目（场记/压缩用）：sideEntryOf 是唯一主人，定义与语义见 bindSession 前
+  getRepairEntry: () => {
+    const selected = loadConfig(cwd).repairModel;
+    if (!selected) return undefined;
+    const entry = findModelEntry(loadAgentConfig(cwd).config.providers?.[selected.provider]?.models, selected.entry);
+    if (!entry) return { error: t("状态修改模型 {model} 不在连接配置里。", { model: `${selected.provider}/${selected.entry}` }) };
+    const base = session.modelRuntime.getModel(selected.provider, entry.id);
+    if (!base) return { error: t("状态修改模型 {model} 当前不可用。", { model: `${selected.provider}/${selected.entry}` }) };
+    if (!session.modelRuntime.hasConfiguredAuth(base.provider)) return { error: t("状态修改模型 {model} 缺少 API key。", { model: `${selected.provider}/${selected.entry}` }) };
+    const mapped = applyEntryThinkingMap(base, entry);
+    return { model: typeof entry.maxTokens === "number" && entry.maxTokens > 0 ? { ...mapped, maxTokens: entry.maxTokens } : mapped };
+  },
+  getRepairPrompt: () => loadConfig(cwd).repairPrompt ?? "",
 	getSideEntry: sideEntryOf,
 	getThinking: () => session.thinkingLevel,
 	// 场记落盘 → fs.watch 自动广播 state 帧（与扩展/REST 写路径同一条）

@@ -268,6 +268,7 @@ interface StageAgentSession {
 	setTurnSystemPrompt(prompt: string): void;
 }
 
+export type StateRepairModelEntry = { model: StageModelLike } | { error: string };
 export interface StageEngineDeps {
 	cwd: string;
 	getSession: () => StageAgentSession;
@@ -285,6 +286,7 @@ export interface StageEngineDeps {
 	 * 「模型是这条的、档是那条的」这种对不上的状态。见 RpConfig.sideModel。
 	 */
 	getSideEntry?: () => { model: StageModelLike; thinking?: string; label?: string } | undefined;
+  getRepairEntry?: () => StateRepairModelEntry | undefined;
 	/** 会话当前思考档（用户自由，引擎透传） */
 	getThinking?: () => string | undefined;
 	/** 账本磁盘缓存路径（.liyuan-state/<sessionId>.json）；给出则场记落盘（fs.watch → state 帧） */
@@ -652,7 +654,7 @@ const pendingScribesFromBranch = (branch: BranchEntryLike[], completed = complet
 		);
 };
 
-type StateRepairBinding = { token: string; sessionId: string; leafId: string | null; stateJson: string; instruction: string; repair: ParsedStateRepair; nextState: WorldState; changes: StateRepairChange[] };
+type StateRepairBinding = { token: string; chatId: string; sessionId: string; leafId: string | null; stateJson: string; instruction: string; repair: ParsedStateRepair; nextState: WorldState; changes: StateRepairChange[] };
 type StateRepairAudit = { before: WorldState; undoOf: string } | { before: WorldState; instruction: string; repair: ParsedStateRepair };
 export class StageEngine {
 	#deps: StageEngineDeps;
@@ -945,15 +947,23 @@ export class StageEngine {
 		});
 	}
 
-	async proposeStateRepair(instruction: string): Promise<StateRepairParseResult> {
+  async proposeStateRepair(chatId: string, instruction: string, history: Array<{ role: "user" | "assistant"; text: string }>): Promise<StateRepairParseResult> {
 		if (this.#busy || this.#refreshing) return { kind: "invalid", reason: "当前有生成或记账任务。" };
 		const text = instruction.trim();
 		if (!text || text.length > STATE_REPAIR_INSTRUCTION_MAX) return { kind: "invalid", reason: `请填写 1–${STATE_REPAIR_INSTRUCTION_MAX} 字符的纠错说明。` };
-		const model = this.#deps.getModel();
-		if (!model) return { kind: "invalid", reason: "尚未配置剧情模型。" };
+    let repairEntry: StateRepairModelEntry | undefined;
+    try {
+      repairEntry = this.#deps.getRepairEntry?.();
+    } catch (error) {
+      return { kind: "invalid", reason: `状态修改模型不可用：${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (repairEntry && "error" in repairEntry) return { kind: "invalid", reason: repairEntry.error };
+    const model = repairEntry?.model ?? this.#deps.getModel();
+    if (!model) return { kind: "invalid", reason: "尚未配置可用模型。" };
 		const session = this.#deps.getSession();
 		const sm = session.sessionManager;
-		const materials = loadStageMaterials(this.#deps.cwd);
+    const sessionId = sm.getSessionId();
+    const materials = loadStageMaterials(this.#deps.cwd);
 		const leafBefore = sm.getLeafId();
 		const rawBranch = applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[];
 		const stateProbe = { type: "custom", customType: STATE_ENTRY_TYPE } as BranchEntryLike;
@@ -961,7 +971,7 @@ export class StageEngine {
 			return { kind: "invalid", reason: "当前旧写作分支会隐藏状态快照；请先回到角色扮演分支再纠错。" };
 		}
 		const branch = storyBranch(rawBranch) as BranchEntryLike[];
-		const rawState = this.#repairBaseline(branch, sm.getSessionId(), sm.getEntries() as BranchEntryLike[]);
+    const rawState = this.#repairBaseline(branch, sessionId, sm.getEntries() as BranchEntryLike[]);
 		const beats = completedStoryBeats(branch);
 		const recent = beats.slice(-12);
 		const story = recent.length ? serializeForSummary(branch.slice(recent[0]!.start, recent.at(-1)!.end + 1), materials.config.userName, materials.card.name).slice(-STATE_REPAIR_STORY_MAX) : "";
@@ -970,16 +980,18 @@ export class StageEngine {
 		this.#stateRepair = null;
 		try {
 			const auth = await this.#deps.getAuth(model);
-			const prompt = buildStateRepairPrompt({ state, instruction: text, story, charName: materials.card.name, userName: materials.config.userName, mvuRules: state.mvu ? findMvuRules(materials.card.book) : undefined });
+      const instructionSources = history.filter((message) => message.role === "user").map((message) => message.text);
+      const allInstructions = instructionSources.join("\n");
+      const prompt = buildStateRepairPrompt({ state, instruction: allInstructions || text, history, story, charName: materials.card.name, userName: materials.config.userName, mvuRules: state.mvu ? findMvuRules(materials.card.book) : undefined, additionalPrompt: this.#deps.getRepairPrompt?.() });
 			const response = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, "scribe");
 			if (typeof response !== "string") return { kind: "invalid", reason: response.error };
-			if (this.#deps.getSession() !== session || sm.getLeafId() !== leafBefore || JSON.stringify(this.#repairBaseline(sm.getBranch() as BranchEntryLike[], sm.getSessionId(), sm.getEntries() as BranchEntryLike[])) !== JSON.stringify(rawState)) {
+      if (this.#deps.getSession() !== session || sm.getSessionId() !== sessionId || sm.getLeafId() !== leafBefore || JSON.stringify(this.#repairBaseline(sm.getBranch() as BranchEntryLike[], sessionId, sm.getEntries() as BranchEntryLike[])) !== JSON.stringify(rawState)) {
 				return { kind: "invalid", reason: "修复分析期间分支或状态发生变化，请重新提交。" };
 			}
-			const result = parseStateRepairResult(response, { state, instruction: text, story });
+      const result = parseStateRepairResult(response, { state, instruction: instructionSources.length ? instructionSources : [text], story });
 			if (result.kind === "proposal") {
 				const token = randomUUID();
-				this.#stateRepair = { token, sessionId: sm.getSessionId(), leafId: leafBefore, stateJson: JSON.stringify(rawState), instruction: text, repair: result.repair, nextState: result.state, changes: result.changes };
+        this.#stateRepair = { token, chatId, sessionId, leafId: leafBefore, stateJson: JSON.stringify(rawState), instruction: allInstructions || text, repair: result.repair, nextState: result.state, changes: result.changes };
 				return { ...result, token } as StateRepairParseResult & { token: string };
 			}
 			return result;
@@ -991,9 +1003,9 @@ export class StageEngine {
 		}
 	}
 
-	applyStateRepair(token: string): { ok: boolean; reason?: string; state?: WorldState; warning?: boolean; changes?: StateRepairChange[]; undoToken?: string } {
+  applyStateRepair(chatId: string, token: string): { ok: boolean; reason?: string; state?: WorldState; warning?: boolean; changes?: StateRepairChange[]; undoToken?: string } {
 		const proposal = this.#stateRepair;
-		if (!proposal || proposal.token !== token) return { ok: false, reason: "修复提案已失效，请重新分析。" };
+    if (!proposal || proposal.token !== token || proposal.chatId !== chatId) return { ok: false, reason: "修复提案已失效，请重新分析。" };
 		if (this.#busy || this.#refreshing) return { ok: false, reason: "当前有生成或记账任务。" };
 		const sm = this.#deps.getSession().sessionManager;
 		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];

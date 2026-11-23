@@ -38,6 +38,7 @@ import { FloatWindow } from "./components/FloatWindow.tsx";
 import { PreviewRunner, type CardPreviewRequestFrame } from "./components/PreviewRunner.tsx";
 import { WelcomePanel } from "./components/HomePage.tsx";
 import { StatusPanel } from "./components/StatusPanel.tsx";
+import { StateRepairWorkspace } from "./components/StateRepairWorkspace.tsx";
 import { UpdateModal, UpdateToast } from "./components/UpdateFlow.tsx";
 import { bumpWatchPanels, PanelRefreshContext } from "./components/kit.tsx";
 import {
@@ -398,6 +399,29 @@ export default function App() {
 	const [rightPanel, setRightPanel] = useState<PanelId | AgentPanelId | null>(initialPanels.right);
 	/** 悬浮窗当前显示的面板（与左右栏并列的第三种形态，同时只开一个） */
 	const [floatPanel, setFloatPanel] = useState<PanelId | AgentPanelId | null>(null);
+const welcomeRef = useRef(false);
+const [repairWorkspace, setRepairWorkspace] = useState(false);
+const repairSendRef = useRef<((text: string) => Promise<void>) | null>(null);
+const repairLayoutRef = useRef<{ left: PanelId | AgentPanelId | null; right: PanelId | AgentPanelId | null; float: PanelId | AgentPanelId | null; welcome: boolean } | null>(null);
+const enterRepairWorkspace = useCallback(() => {
+  if (repairWorkspace) {
+    setRepairWorkspace(false);
+    if (repairLayoutRef.current) {
+      setLeftPanel(repairLayoutRef.current.left);
+      setRightPanel(repairLayoutRef.current.right);
+      setFloatPanel(repairLayoutRef.current.float);
+      setWelcome(repairLayoutRef.current.welcome);
+      repairLayoutRef.current = null;
+    }
+    return;
+  }
+  repairLayoutRef.current = { left: leftPanel, right: rightPanel, float: floatPanel, welcome: welcomeRef.current };
+  setRepairWorkspace(true);
+  setWelcome(false);
+  setLeftPanel(null);
+  setRightPanel("status");
+  setFloatPanel(null);
+}, [repairWorkspace, leftPanel, rightPanel, floatPanel]);
 	const [studioOpen, setStudioOpen] = useState(false);
 	const [cardLoreOpen, setCardLoreOpen] = useState(false);
 	const [connectEditorTarget, setConnectEditorTarget] = useState<ConnectEditTarget | null>(null);
@@ -522,6 +546,7 @@ export default function App() {
 	 * 久未访问启动显示；点品牌强制打开；开会话/发消息后收起。
 	 */
 	const [welcome, setWelcome] = useState(() => shouldShowHomeOnBoot());
+welcomeRef.current = welcome;
 
 	const dismissWelcome = useCallback(() => {
 		setWelcome(false);
@@ -577,7 +602,6 @@ export default function App() {
 	// onFrame 闭包内读最新面板/左栏选择（useCallback 依赖冻结，走 ref 防陈旧）
 	const agentPanelsRef = useRef<RpPanel[]>([]);
 	const leftPanelRef = useRef<PanelId | AgentPanelId | null>(initialPanels.left);
-	const welcomeRef = useRef(false);
 	/** 在 onFrame 里发 WS（useWire 后于 onFrame 定义，走 ref） */
 	const sendRef = useRef<(frame: import("./wire.ts").ClientFrame) => void>(() => {});
 	const toastSeq = useRef(0);
@@ -1793,8 +1817,13 @@ export default function App() {
 
 	const isAddressingBtw = conversationMode === "roleplay" && parseBtwText(input) !== null;
 
-	const send = useCallback(() => {
-		const typed = input.trim();
+const send = useCallback(() => {
+  if (repairWorkspace) {
+    if (pending.length) { pushToast("warning", t("状态修改会话不支持附件")); return; }
+    void repairSendRef.current?.(input);
+    return;
+  }
+  const typed = input.trim();
 		// 附件随消息：路径清单作为尾行附在正文后（这一行即持久记录，重放同路径解析）
 		const attachLine = pending.length > 0 ? buildAttachmentLine(pending.map((p) => p.file)) : "";
 		const text = attachLine ? (typed ? `${typed}\n${attachLine}` : attachLine) : typed;
@@ -1909,7 +1938,7 @@ export default function App() {
 		atBottomRef.current = true;
 		setAtBottom(true);
 		if (inputRef.current) inputRef.current.style.height = "auto";
-	}, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes, parseBtwText, collectLiyuanInjections]);
+  }, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes, parseBtwText, collectLiyuanInjections, repairWorkspace]);
 
 
 	// 卡 HTML（如 某卡 开场表单）调用 triggerSlash(`/send …|/trigger`)
@@ -3291,13 +3320,13 @@ export default function App() {
 						/>
 					)}
 					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${middleOpen && !agentSplit ? "center-middle-split" : ""} ${agentSplit ? "center-agent-split" : ""}`}>
-					<div className={`stage-wrap ${rightPanel ? "split-active" : ""} ${agentSplit && rightPanel ? "agent-panel-cover" : ""}`}>
+					<div className={`stage-wrap ${rightPanel ? "split-active" : ""} ${agentSplit && rightPanel ? "agent-panel-cover" : ""} ${repairWorkspace ? "repair-split" : ""}`}>
 					<div className="stage-col stage-col-left">
 						{(rightPanel || agentSplit || middleOpen) && (
 							<div className="stage-col-head">
 								<span className="stage-col-title">
-									<IconCard size={14} />
-									<span>{agentSplit ? t("讨论") : t("剧情推演")}</span>
+									{repairWorkspace ? <IconStatus size={14} /> : <IconCard size={14} />}
+									<span>{repairWorkspace ? t("状态修改") : agentSplit ? t("讨论") : t("剧情推演")}</span>
 								</span>
 								{agentSplit && (
 									<button type="button" className="story-tab-btn" onClick={() => setStoryTab("story")}>
@@ -3306,8 +3335,9 @@ export default function App() {
 								)}
 							</div>
 						)}
-					<div className="list" ref={listRef} onScroll={onScroll} onPointerDown={() => composerTools && setComposerTools(false)}>
-						<div id="chat" className="flow">
+<div className="list" ref={listRef} onScroll={onScroll} onPointerDown={() => composerTools && setComposerTools(false)}>
+{repairWorkspace && <StateRepairWorkspace key={sessionIdRef.current} sessionId={sessionIdRef.current} setInput={setInput} sendRef={repairSendRef} toast={pushToast} onExit={enterRepairWorkspace} onApplied={() => { setStatusBranchVersion((version) => version + 1); void refreshWorldState(); }} />}
+<div id="chat" className="flow" hidden={repairWorkspace}>
 							{/* 欢迎区嵌在聊天流（学 ST）：顶栏/侧栏/输入框仍可用 */}
 							{welcome ? (
 								<WelcomePanel
@@ -3776,7 +3806,7 @@ export default function App() {
 					</div>
 					{rightPanel && (() => {
 						const pane = (
-							<aside className="stage-col stage-col-right" aria-label={panelLabel(rightPanel) || t("状态栏")}>
+							<aside className={`stage-col stage-col-right ${repairWorkspace && rightPanel === "status" ? "repair-status-only" : ""}`} aria-label={panelLabel(rightPanel) || t("状态栏")}>
 								<div className="stage-col-head">
 									<div className="stage-col-head-main">
 										<span className="stage-col-title">
@@ -3875,7 +3905,7 @@ export default function App() {
 						{/* 生效世界状态与角色卡脚本快捷按钮：输入框上方，与输入同宽一排 */}
 						{!welcome && (
 							<div className="composer-shell status-above">
-							{conversationMode === "roleplay" && (
+							{conversationMode === "roleplay" && !repairWorkspace && (
 								<StatusStrip
 									state={worldState}
 									toast={pushToast}
@@ -3883,7 +3913,7 @@ export default function App() {
 									onOpenPanel={() => toggleRight("status")}
 								/>
 							)}
-							{conversationMode === "roleplay" && scriptButtons.length > 0 && (
+							{conversationMode === "roleplay" && !repairWorkspace && scriptButtons.length > 0 && (
 								<div className="script-btn-strip" style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
 									{scriptButtons.map((btn) => (
 										<button
@@ -4215,6 +4245,7 @@ export default function App() {
 												<span className="btw-at-glyph" aria-hidden="true">@</span>
 												<span className="composer-tool-label">{btwName}</span>
 											</button>
+<button type="button" className={`dock-btn ${repairWorkspace ? "active" : ""}`} title={repairWorkspace ? t("返回剧情") : t("状态修改")} aria-label={repairWorkspace ? t("返回剧情") : t("状态修改")} onClick={() => { enterRepairWorkspace(); setComposerTools(false); }}><IconStatus size={18} /><span className="composer-tool-label">{t("状态修改")}</span></button>
 											<button
 												type="button"
 												className="dock-btn"
@@ -4235,28 +4266,12 @@ export default function App() {
 									toast={pushToast}
 									onOpenConnect={() => openLeft("connect")}
 								/>
-								{isAddressingBtw ? (
-									btwStreaming ? (
-										<button
-											id="mes_stop"
-											className="btn btn-stop mes_stop"
-											onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
-											title={t("停止")}
-											aria-label={t("停止生成")}
-										>
-											<IconStop size={18} />
-										</button>
-									) : (
-										<button
-											className="btn btn-send"
-											onClick={send}
-											disabled={!parseBtwText(input) || conn !== "open"}
-											title={t("发送")}
-											aria-label={t("发送")}
-										>
-											<IconSend size={17} />
-										</button>
-									)
+{repairWorkspace ? <button className="btn btn-send" onClick={send} disabled={!input.trim() || conn !== "open"} title={t("发送")} aria-label={t("发送")}><IconSend size={17} /></button> : isAddressingBtw ? (
+  btwStreaming ? (
+    <button id="mes_stop" className="btn btn-stop mes_stop" onClick={() => ws.send({ type: "prompt", text: "/btw stop" })} title={t("停止")} aria-label={t("停止生成")}><IconStop size={18} /></button>
+  ) : (
+    <button className="btn btn-send" onClick={send} disabled={!parseBtwText(input) || conn !== "open"} title={t("发送")} aria-label={t("发送")}><IconSend size={17} /></button>
+  )
 								) : busy ? (
 									<button
 										id="mes_stop"
@@ -4308,7 +4323,7 @@ export default function App() {
 									>
 										<IconSend size={17} />
 									</button>
-								)}
+)}
 							</div>
 						</div>
 						{/* 会话用量：输入框下方，右缘与输入框齐平 */}
