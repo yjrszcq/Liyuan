@@ -113,7 +113,7 @@ export function resolveViewportUnits(html: string, viewportPx: number): string {
  */
 const TAVERN_BOX_SIZING = `*{box-sizing:border-box}`;
 
-const LEGACY_BASE_CSS = `html,body{margin:0;padding:0;background:transparent;color:#3f3f3f;` +
+const LEGACY_BASE_CSS = `html,body{margin:0;padding:0;background:transparent;color:CanvasText;` +
 	`font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC","Segoe UI",sans-serif}` +
 	`img,video{max-width:100%;height:auto}` +
 	`* {box-sizing:border-box}`;
@@ -432,7 +432,7 @@ export function buildSrcDoc(html: string, scripts: boolean, seamless: boolean, v
 	const head =
 		`<meta charset="utf-8">` +
 		`<meta http-equiv="Content-Security-Policy" content="${csp}">` +
-		`<style>${seamless ? seamlessCss : LEGACY_BASE_CSS}</style>` +
+		`<style>html{color-scheme:light dark}${seamless ? seamlessCss : LEGACY_BASE_CSS}</style>` +
 		bridge;
 	// 高度：脚本+seamless 用 postMessage；接管型不上报——父页锁视口高不收内容量高，
 	// 上报器与卡内 ResizeObserver 互踩正是「收拢/涨高」乒乓抖动的源头

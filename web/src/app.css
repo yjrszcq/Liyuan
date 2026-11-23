@@ -7858,7 +7858,7 @@ label.drawer-btn {
 	display: block;
 	width: 100%;
 	border: 0;
-	background: #f7f7f8;
+	background: var(--surface);
 }
 .msg-html-source {
 	margin: 0;
