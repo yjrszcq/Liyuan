@@ -189,6 +189,7 @@ export const server: Record<string, string> = {
   "剧情会话已切换，本次提案未保存。": "The roleplay session changed; this proposal was not saved.",
   "状态修改会话已删除，本次提案未保存。": "The state-modification chat was deleted; this proposal was not saved.",
   "已生成状态修改提案，请核对差异与证据后确认应用。": "A state-modification proposal is ready. Review the changes and evidence before applying.",
+  "只读答复，未生成修改提案。": "Read-only answer; no modification proposal was generated.",
   "修复提案已失效，请重新分析。": "This repair proposal has expired; analyze again.",
   "状态修改模型 {model} 不在连接配置里。": "State-modification model {model} is not in the connection configuration.",
   "状态修改模型 {model} 当前不可用。": "State-modification model {model} is currently unavailable.",

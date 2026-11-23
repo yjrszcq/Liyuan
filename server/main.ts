@@ -1869,7 +1869,7 @@ const restHost: RestHost = {
       const token = (result as typeof result & { token: string }).token;
       target.messages.push({ role: "assistant", text: t("已生成状态修改提案，请核对差异与证据后确认应用。"), ...(assistantThinking ? { thinking: assistantThinking } : {}), proposal: { token, changes: result.changes, evidence: result.repair.evidence } });
     } else {
-      target.messages.push({ role: "assistant", text: result.kind === "clarification" ? result.question : result.reason, ...(assistantThinking ? { thinking: assistantThinking } : {}) });
+      target.messages.push({ role: "assistant", text: result.kind === "clarification" ? result.question : result.kind === "answer" ? `${t("只读答复，未生成修改提案。")}\n\n${result.text}` : result.reason, ...(assistantThinking ? { thinking: assistantThinking } : {}) });
     }
     saveRepairChats(cwd, sessionId, latest);
     return { chat: target };

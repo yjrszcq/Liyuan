@@ -185,6 +185,24 @@ test("手动刷新按当前分支对账，重复刷新不重复追加状态", as
 	}
 });
 
+test("状态问答读取当前账本，不写入分支或创建提案", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		sm.appendCustomEntry("rp-state", { time: "黄昏", location: "旧桥", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
+		reg.setResponses([fauxAssistantMessage(JSON.stringify({ answer: "当前位置是旧桥，随身带着怀表。" }))] as never);
+		const engine = await makeEngine(cwd, sm, reg.getModel("faux-rp"));
+		const leaf = sm.getLeafId();
+		const result = await engine.proposeStateRepair("test-chat", "看看现在的状态", [{ role: "user", text: "看看现在的状态" }]);
+		assert.deepEqual(result, { kind: "answer", text: "当前位置是旧桥，随身带着怀表。" });
+		assert.equal(sm.getLeafId(), leaf);
+		assert.equal(engine.applyStateRepair("test-chat", "nonexistent").ok, false);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("状态修复：提案确认后写入当前分支，并只允许一次无后续写入的撤销", async () => {
 	const { cwd, sm } = makeStage();
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });

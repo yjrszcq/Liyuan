@@ -157,7 +157,6 @@ export const lore: Record<string, string> = {
 	"没有匹配的图片。": "No matching images.",
 
 	// 状态面板
-	"随剧情展开，时间、地点、登场人物与随身行囊将由场记自动登记入册。": "As the story unfolds, the scribe records time, place, characters and inventory here automatically.",
 	"戏境时空": "Time and place",
 	"纪年时间": "Time",
 	"（随剧情自动推进）": "(advances with the story)",

@@ -32,6 +32,29 @@ test("状态修复解析有效补丁并核验逐字剧情证据", () => {
 	assert.deepEqual(args.state.inventory, ["怀表"], "提案不能改动账本输入对象");
 });
 
+test("MVU 修复路径相对于变量树，错误前缀不能产生提案", () => {
+	const instruction = "把体力改成 5";
+	const original = { ...state(), mvu: { 属性: { 体力: 3 } } };
+	const args = { state: original, instruction, story: "" };
+	const evidence = [{ source: "instruction", quote: instruction }];
+	const parse = (path: string) => parseStateRepairResult(JSON.stringify({ patch: {}, mvu_patch: { [path]: 5 }, evidence }), args);
+	assert.equal(parse("mvu.属性.体力").kind, "invalid");
+	const result = parse("属性.体力");
+	assert.equal(result.kind, "proposal");
+	if (result.kind !== "proposal") return;
+	assert.deepEqual(result.changes, [{ path: "mvu.属性.体力", before: 3, after: 5 }]);
+	assert.equal(original.mvu.属性.体力, 3);
+});
+
+test("只读回答不要求证据，不接受混入补丁或空回答", () => {
+	const args = input();
+	assert.deepEqual(parseStateRepairResult(JSON.stringify({ answer: "当前位置是旧桥。" }), args), { kind: "answer", text: "当前位置是旧桥。" });
+	for (const body of [{ answer: "  " }, { answer: "已修改", patch: { location: "新桥" } }, { answer: "已修改", mvu_patch: {} }, { answer: "已修改", panel_patch: {} }, { answer: "回答", clarification: "哪里？" }]) {
+		assert.equal(parseStateRepairResult(JSON.stringify(body), args).kind, "invalid");
+	}
+	assert.equal(parseStateRepairResult(JSON.stringify({ patch: { location: "新桥" }, evidence: [] }), args).kind, "invalid");
+});
+
 test("信息不足时只返回澄清问题，不产生补丁", () => {
 	const args = input();
 	const parsed = parseStateRepairResult(JSON.stringify({

@@ -9,8 +9,10 @@ import { apiGet, apiPost, apiPut, type StatePatchResult } from "../api.ts";
 import type { WorldState } from "../wire.ts";
 import { IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
-import { Editable, isEmptyState } from "./StatusStrip.tsx";
+import { Editable } from "./StatusStrip.tsx";
 import { t } from "../i18n/index.ts";
+
+const HIDDEN_UNDO_REASON = "修复后已有状态写入，不能安全撤销。"; // i18n-ignore
 
 export interface StatusPanelProps {
 	state: WorldState | null;
@@ -55,7 +57,6 @@ const { run } = useAction(toast);
 		return Number.isFinite(n) ? n : fallback;
 	};
 
-	const empty = !state || isEmptyState(state);
 	const characters = Object.entries(state?.characters ?? {});
 	const flags = Object.entries(state?.flags ?? {});
 	const inventory = state?.inventory ?? [];
@@ -71,9 +72,8 @@ const { run } = useAction(toast);
 					</button>
 				</div>
 			)}
-			{empty && <div className="sp-empty-banner">{t("随剧情展开，时间、地点、登场人物与随身行囊将由场记自动登记入册。")}</div>}
 {undoToken && <section className="sp-section"><div className="sp-section-body"><button type="button" className="drawer-btn" disabled={undoBusy} onClick={() => void undoRepair()}>{t("撤销最近状态修复")}</button></div></section>}
-{!undoToken && undoReason && <p className="sp-repair-note">{undoReason}</p>}
+{!undoToken && undoReason && undoReason !== HIDDEN_UNDO_REASON && <p className="sp-repair-note">{undoReason}</p>}
 			{/* ── 戏境时空 ── */}
 			<section className="sp-section">
 				<div className="sp-section-head">

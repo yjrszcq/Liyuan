@@ -6599,16 +6599,6 @@ input.panel-search.num {
 	background: transparent;
 	overflow-y: auto;
 }
-.sp-empty-banner {
-	font-size: 12px;
-	color: var(--text-soft);
-	line-height: 1.5;
-	padding: 10px 12px;
-	background: var(--accent-wash);
-	border: 1px solid var(--hairline);
-	border-radius: var(--radius);
-}
-
 .sp-pending-scribe {
 	display: flex;
 	align-items: center;
@@ -12240,6 +12230,7 @@ html[data-has-wallpaper="true"] .composer-box {
 }
 .repair-user { align-self: flex-end; background: var(--accent-wash); }
 .repair-assistant { align-self: flex-start; }
+.repair-assistant > .info-line { max-width: none; overflow-wrap: anywhere; }
 .repair-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .repair-proposal { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--hairline-strong); }
 .repair-proposal ul { display: grid; gap: 8px; padding-left: 18px; }
@@ -12258,6 +12249,7 @@ html[data-has-wallpaper="true"] .composer-box {
 .repair-chat-option button { padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-strong); text-align: left; }
 .repair-chat-option button:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repair-chat-rename { flex: 1 1 auto; min-width: 0; margin: 3px 0; padding: 4px 8px; color: var(--text-strong); background: var(--surface); border: 1px solid var(--hairline-strong); border-radius: 6px; }
+.repair-chat-rename:focus-visible { outline: none; border-color: var(--accent); }
 .repair-chat-option button:hover { background: var(--accent-wash); }
 .repair-status-only .editable .edit-pen, .repair-status-only .sp-char-entry .act, .repair-status-only .sp-pending-scribe button, .repair-status-only .sp-section button { display: none; }
 .repair-status-only input, .repair-status-only textarea { pointer-events: none; }
