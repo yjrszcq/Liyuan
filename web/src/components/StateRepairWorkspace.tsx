@@ -29,9 +29,10 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
-  const [pending, setPending] = useState<{ id: string; text: string; thinking: string; reply: string } | null>(null);
+  const [pending, setPending] = useState<{ id: string; text: string; thinking: string; reply: string; index?: number } | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const workspaceRef = useRef<HTMLElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const [header, setHeader] = useState<Element | null>(null);
   useEffect(() => { setHeader(workspaceRef.current?.closest(".stage-col")?.querySelector(".stage-col-head") ?? null); }, []);
   const epoch = useRef(0);
@@ -44,6 +45,9 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
     setChats(result.chats);
     if (!result.chats.some((chat) => chat.id === chatId)) setChatId(result.chats[0]?.id ?? "");
   };
+  useEffect(() => {
+    if (pending && pending.id === chatId && messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [pending?.id, pending?.index, chatId]);
   useEffect(() => {
     const version = ++epoch.current;
     setChats([]); setChatId(""); setInput(""); setBusy(true); setRenaming(null); setPickerOpen(false); setPending(null); setEditing(null);
@@ -82,7 +86,7 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
     const version = epoch.current;
     const parentSessionId = sessionId;
     let id = chatId;
-    setPending({ id, text: message, thinking: "", reply: "" });
+    setPending({ id, text: message, thinking: "", reply: "", index });
     setInput("");
     setBusy(true);
     try {
@@ -187,8 +191,8 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
       </div>)}</div>}
       <button type="button" className="icon-btn" onClick={onExit} title={t("返回剧情")} aria-label={t("返回剧情")}><IconClose size={15} /></button>
     </div>, header)}
-    <div className="repair-messages">
-      {activeChat?.messages.map((message, index) => {
+    <div ref={messagesRef} className="repair-messages">
+      {activeChat?.messages.slice(0, pending && pending.id === chatId ? pending.index : undefined).map((message, index) => {
         let sourceUserIndex = -1;
         for (let i = index; i >= 0; i--) if (activeChat.messages[i].role === "user") { sourceUserIndex = i; break; }
         return <div key={`${activeChat.id}-${index}`} className={`repair-message-row repair-row-${message.role}`}>
@@ -214,7 +218,7 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
         <article className="repair-message repair-user"><div className="repair-message-text">{renderMarkdown(pending.text)}</div></article>
         <article className="repair-message repair-assistant">
           {pending.thinking && <ThinkingBlock text={pending.thinking} live={!pending.reply} />}
-          {pending.reply ? <details className="thinking"><summary>{t("回复")}</summary><div className="thinking-body repair-message-text">{renderMarkdown(pending.reply)}</div></details> : <div className="info-line pulse">{t("正在核对剧情...")}</div>}
+          {pending.reply ? <details className="thinking" open><summary>{t("回复")}</summary><div className="thinking-body repair-message-text">{renderMarkdown(pending.reply)}</div></details> : <div className="info-line pulse">{t("正在核对剧情...")}</div>}
         </article>
       </>}
     </div>
