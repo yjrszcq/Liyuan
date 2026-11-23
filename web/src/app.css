@@ -12237,6 +12237,7 @@ html[data-has-wallpaper="true"] .composer-box {
 .repair-action:hover:not(:disabled) { color: var(--text-strong); border-color: var(--hairline-strong); }
 .repair-action:disabled { opacity: .5; cursor: default; }
 .repair-edit-input { display: block; width: 100%; min-width: 0; min-height: 90px; padding: 8px; border: 1px solid var(--hairline-strong); border-radius: 8px; background: var(--surface); color: var(--text-strong); font: inherit; resize: vertical; }
+.repair-edit-input:focus-visible { outline: none; border-color: var(--accent); }
 .repair-proposal { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--hairline-strong); }
 .repair-proposal .drawer-btn:disabled, .repair-proposal .drawer-btn:disabled:hover { background: var(--surface); color: var(--text-faint); border-color: var(--hairline); opacity: .65; cursor: not-allowed; }
 .repair-proposal ul { display: grid; gap: 8px; padding-left: 18px; }
