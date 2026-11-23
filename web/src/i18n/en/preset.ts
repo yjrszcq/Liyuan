@@ -92,6 +92,8 @@ export const preset: Record<string, string> = {
 	"写作模式全局常驻系统提示词（AGENT_APPEND_SYSTEM.md），对所有写作模式项目生效。": "Global standing system prompt for writing mode (AGENT_APPEND_SYSTEM.md); applies to all writing mode projects.",
 	"助手系统提示词": "Assistant system prompt",
 	"扮演模式旁路助手的底层工作规则（BTW_APPEND_SYSTEM.md）；助手的性格设定请在「角色 → 助手」中修改。": "Core working rules for the roleplay side assistant (BTW_APPEND_SYSTEM.md); edit the assistant's personality under Roles → Assistant.",
+	"状态修改提示词": "State modification prompt",
+	"状态修改模型的补充规则（REPAIR_APPEND_SYSTEM.md）；仅补充内置规则，不改变状态范围、证据校验或确认应用边界。": "Additional instructions for the state-modification model (REPAIR_APPEND_SYSTEM.md). They supplement built-in rules and do not change state scope, evidence checks, or the confirmation boundary.",
 	"{count} 条 · {n} 字": "{count} entries · {n} chars",
 	"在右侧展开整份文件查看或编辑": "Open the full file in the right-hand editor to view or edit",
 	"全文": "Full file",

@@ -158,6 +158,13 @@ export const IconRoster = (p: IconProps) => (
 	</Icon>
 );
 
+/** State modification workspace: a slider/adjustment control mark. */
+export const IconAdjust = (p: IconProps) => (
+	<Icon {...p}>
+		<path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M2 14h4m4-6h4m4 8h4" />
+	</Icon>
+);
+
 /* ── 功能图标 ── */
 
 export const IconClose = (p: IconProps) => (

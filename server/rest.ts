@@ -89,6 +89,7 @@ import {
 	resolveConfigPath,
 	sameCardPath,
 } from "../src/paths.ts";
+import { REPAIR_RULES_FILE, repairRulesPath } from "../src/repair-rules.ts";
 import { createCardSpace, exportChatZip, importChatZip, isInternalChatWorkspacePath, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
@@ -533,7 +534,6 @@ const CONFIG_EDITABLE = new Set([
   "btwModel",
 	"btwPersonaTemplates",
   "repairModel",
-  "repairPrompt",
 ]);
 
 export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown>): RpConfig {
@@ -639,8 +639,6 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
     else if (!rm || typeof rm !== "object" || typeof rm.provider !== "string" || !rm.provider.trim() || typeof rm.entry !== "string" || !rm.entry.trim()) delete next.repairModel;
     else next.repairModel = { provider: rm.provider.trim(), entry: rm.entry.trim() };
   }
-  if (next.repairPrompt !== undefined && typeof next.repairPrompt !== "string") delete next.repairPrompt;
-  if (typeof next.repairPrompt === "string") next.repairPrompt = next.repairPrompt.slice(0, 20_000);
 	// 旁路助手性格模板列表：允许保存空数组 []（代表用户删空了全部模板）；null/空串已在上方删除键（恢复内置默认）
 	if (next.btwPersonaTemplates !== undefined) {
 		if (!Array.isArray(next.btwPersonaTemplates)) {
@@ -3848,7 +3846,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, { name: presetNameFromFile(file), json: JSON.parse(readFileSync(abs, "utf8")) });
 				return true;
 			}
-			// ---- 用户提示词（刀2/前端重构）：SYSTEM.md + 全局追加（扮演/写作）+ 卡级 APPEND_SYSTEM.md ----
+			// ---- 用户提示词：SYSTEM.md + 扮演/写作 + 状态修复 + 卡级 APPEND_SYSTEM.md ----
 			case "GET /api/rules": {
 				const config = loadConfig(host.cwd);
 				const cardDir = dirname(resolvePath(host.cwd, config.card));
@@ -3867,6 +3865,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 					global: { content: readGlobalSlot(globalRulesPath(), "APPEND_SYSTEM.md"), path: globalRulesPath() },
 					agent: { content: readGlobalSlot(agentRulesPath(), "AGENT_APPEND_SYSTEM.md"), path: agentRulesPath() },
 					btw: { content: readGlobalSlot(btwRulesPath(), "BTW_APPEND_SYSTEM.md"), path: btwRulesPath() },
+					repair: { content: readGlobalSlot(repairRulesPath(), REPAIR_RULES_FILE), path: repairRulesPath() },
 					card: { content: rules.card, path: cardRulesPath(cardDir), cardName: config.displayName ?? basename(config.card).replace(/\.(png|json)$/i, "") },
 					system: { content: readGlobalSlot(systemPromptPath(), "SYSTEM.md"), path: systemPromptPath() },
 				});
@@ -3890,13 +3889,16 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				} else if (body.scope === "btw") {
 					abs = btwRulesPath();
 					mkdirSync(rulesAgentDir(), { recursive: true });
+				} else if (body.scope === "repair") {
+					abs = repairRulesPath();
+					mkdirSync(rulesAgentDir(), { recursive: true });
 				} else if (body.scope === "card") {
 					const cardDir = dirname(resolvePath(host.cwd, config.card));
 					mkdirSync(cardDir, { recursive: true });
 					abs = cardRulesPath(cardDir);
 					await syncBackFromCardPrompts(host.cwd, "card", body.content);
 				} else {
-					throw new Error(t("scope 必须是 system、global、agent、btw 或 card"));
+					throw new Error(t("scope 必须是 system、global、agent、btw、repair 或 card"));
 				}
 				writeFileSync(abs, body.content, "utf8");
 				await host.softRefreshConfig();

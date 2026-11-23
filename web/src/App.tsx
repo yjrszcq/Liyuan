@@ -83,6 +83,7 @@ import {
 	IconMoon,
 	IconInfo,
 	IconStatus,
+	IconAdjust,
 	IconStop,
 	IconUploads,
 	IconWorldline,
@@ -3322,10 +3323,10 @@ const send = useCallback(() => {
 					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${middleOpen && !agentSplit ? "center-middle-split" : ""} ${agentSplit ? "center-agent-split" : ""}`}>
 					<div className={`stage-wrap ${rightPanel ? "split-active" : ""} ${agentSplit && rightPanel ? "agent-panel-cover" : ""} ${repairWorkspace ? "repair-split" : ""}`}>
 					<div className="stage-col stage-col-left">
-						{(rightPanel || agentSplit || middleOpen) && (
+						{(repairWorkspace || rightPanel || agentSplit || middleOpen) && (
 							<div className="stage-col-head">
 								<span className="stage-col-title">
-									{repairWorkspace ? <IconStatus size={14} /> : <IconCard size={14} />}
+									{repairWorkspace ? <IconAdjust size={14} /> : <IconCard size={14} />}
 									<span>{repairWorkspace ? t("状态修改") : agentSplit ? t("讨论") : t("剧情推演")}</span>
 								</span>
 								{agentSplit && (
@@ -4245,7 +4246,7 @@ const send = useCallback(() => {
 												<span className="btw-at-glyph" aria-hidden="true">@</span>
 												<span className="composer-tool-label">{btwName}</span>
 											</button>
-<button type="button" className={`dock-btn ${repairWorkspace ? "active" : ""}`} title={repairWorkspace ? t("返回剧情") : t("状态修改")} aria-label={repairWorkspace ? t("返回剧情") : t("状态修改")} onClick={() => { enterRepairWorkspace(); setComposerTools(false); }}><IconStatus size={18} /><span className="composer-tool-label">{t("状态修改")}</span></button>
+<button type="button" className={`dock-btn ${repairWorkspace ? "active" : ""}`} title={repairWorkspace ? t("返回剧情") : t("状态修改")} aria-label={repairWorkspace ? t("返回剧情") : t("状态修改")} onClick={() => { enterRepairWorkspace(); setComposerTools(false); }}><IconAdjust size={18} /><span className="composer-tool-label">{t("状态修改")}</span></button>
 											<button
 												type="button"
 												className="dock-btn"

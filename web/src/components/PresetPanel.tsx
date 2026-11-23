@@ -30,6 +30,7 @@ import {
 	type PresetResponse,
 	type PresetsResponse,
 	type RelayPolicyView,
+	type RpConfigView,
 	type RulesResponse,
 	type RulesSaveResponse,
 } from "../api.ts";
@@ -47,7 +48,7 @@ import {
 	type PromptEntry,
 } from "../../../src/prompt-entries.ts";
 
-export type PromptScope = "system" | "global" | "agent" | "btw" | "card" | "agents";
+export type PromptScope = "system" | "global" | "agent" | "btw" | "repair" | "card" | "agents";
 
 export type PresetEditTarget =
 	| {
@@ -110,6 +111,13 @@ const GLOBAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		effect: "beat",
 		hint: () => t("扮演模式旁路助手的底层工作规则（BTW_APPEND_SYSTEM.md）；助手的性格设定请在「角色 → 助手」中修改。"),
 	},
+	{
+		scope: "repair",
+		title: () => t("状态修改提示词"),
+		file: "REPAIR_APPEND_SYSTEM.md", // i18n-ignore
+		effect: "beat",
+		hint: () => t("状态修改模型的补充规则（REPAIR_APPEND_SYSTEM.md）；仅补充内置规则，不改变状态范围、证据校验或确认应用边界。"),
+	},
 ];
 
 const LOCAL_PROMPT_SLOTS: PromptSlotMeta[] = [
@@ -145,6 +153,7 @@ function contentOfScope(
 	if (scope === "global") return rulesData.global?.content ?? "";
 	if (scope === "agent") return rulesData.agent?.content ?? "";
 	if (scope === "btw") return rulesData.btw?.content ?? "";
+	if (scope === "repair") return rulesData.repair?.content ?? "";
 	return rulesData.card?.content ?? "";
 }
 
@@ -200,6 +209,7 @@ export function PresetPanel({
 	const files = usePanelData(() => apiGet<PresetsResponse>("/api/presets"), { cacheKey: "/api/presets", watchAgent: true });
 	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true, watchPanels: true });
 	const agents = usePanelData(() => apiGet<CardAgentsResponse>("/api/card-agents"), { cacheKey: "/api/card-agents", watchAgent: true });
+	const config = usePanelData(() => apiGet<{ config: RpConfigView }>("/api/config"), { cacheKey: "/api/config", watchAgent: true, watchPanels: true });
 	const { busy, run } = useAction(toast);
 
 	const [tab, setTab] = useState<"global" | "local" | "library">("global");
@@ -209,6 +219,7 @@ export function PresetPanel({
 		global: false,
 		agent: false,
 		btw: false,
+		repair: false,
 		card: false,
 		agents: false,
 	});
@@ -750,9 +761,7 @@ export function PresetPanel({
 							</div>
 						) : (
 							<>
-								{entries.length === 0 && (
-									<div className="sp-empty">{t("暂无条目，点击下方「＋ 添加条目」或右上角「全文」编写。")}</div>
-								)}
+								{entries.length === 0 && <div className="sp-empty">{t("暂无条目，点击下方「＋ 添加条目」或右上角「全文」编写。")}</div>}
 								{entries.map((e) => renderEntryRow(slot, rawText, entries, e))}
 							</>
 						)}
@@ -762,13 +771,8 @@ export function PresetPanel({
 								className={`act ${isCreateSelected ? "active" : ""}`}
 								disabled={busy}
 								onClick={() => {
-									if (slot.scope === "agents") {
-										setOpenAgentsCats((prev) => ({ ...prev, custom: true }));
-									}
-									onChangeEditorTarget?.({
-										scope: slot.scope,
-										mode: "create",
-									});
+									if (slot.scope === "agents") setOpenAgentsCats((prev) => ({ ...prev, custom: true }));
+									onChangeEditorTarget?.({ scope: slot.scope, mode: "create" });
 								}}
 							>
 								{t("＋ 添加条目")}
@@ -863,8 +867,8 @@ export function PresetPanel({
 
 			{tab === "global" && (
 				<>
-					<PanelStatus loading={rules.loading} error={rules.error} hasData={!!rules.data} />
-					{rules.data && (
+					<PanelStatus loading={rules.loading || config.loading} error={rules.error || config.error} hasData={Boolean(rules.data && config.data)} />
+					{rules.data && config.data && (
 						<div className="global-prompt-list">
 							{GLOBAL_PROMPT_SLOTS.map((slot) => renderPromptSlot(slot))}
 						</div>

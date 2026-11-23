@@ -379,24 +379,28 @@ function ModelDetailInspect({
 	isCurrent,
 	isSide,
 	isBtw,
+	isRepair,
 	liveThinking,
 	busy,
 	onSelectWithLevel,
 	onPatchEntry,
 	onToggleSide,
 	onToggleBtw,
+	onToggleRepair,
 	onUseModel,
 }: {
 	item: AggregatedModelItem;
 	isCurrent: boolean;
 	isSide: boolean;
 	isBtw?: boolean;
+	isRepair?: boolean;
 	liveThinking: string;
 	busy: boolean;
 	onSelectWithLevel: (level: string) => void;
 	onPatchEntry: (patch: Partial<ModelEntry>) => void;
 	onToggleSide: (on: boolean) => void;
 	onToggleBtw?: (on: boolean) => void;
+	onToggleRepair?: (on: boolean) => void;
 	onUseModel?: () => void;
 }) {
 	const key = entryKeyOf(item.entry);
@@ -646,6 +650,14 @@ function ModelDetailInspect({
 						</button>
 					</div>
 				)}
+				{onToggleRepair && (
+					<div className="wb-inspect-item">
+						<button type="button" className="wb-inspect-row" disabled={busy} onClick={() => onToggleRepair(!isRepair)}>
+							<span className="wb-inspect-label">{t("设为状态修改模型")}</span>
+							<span className="wb-inspect-val"><span>{isRepair ? t("已开启") : t("跟随主模型")}</span><IconChevronRight size={13} className="wb-inspect-arrow" /></span>
+						</button>
+					</div>
+				)}
 			</div>
 
 			{onUseModel && !isCurrent && (
@@ -685,6 +697,7 @@ export function ComposerModelSwitch({
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
 	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
+	const repairEntry = rpConfig.data?.config?.repairModel ?? null;
 	const storyKey = typeof activeConfig.defaultModelEntry === "string" ? activeConfig.defaultModelEntry.trim() : "";
 
 	const allItems = useMemo(() => buildAggregatedModels(activeConfig, allModels), [activeConfig, allModels]);
@@ -839,6 +852,14 @@ export function ComposerModelSwitch({
 			bumpWatchPanels();
 		}, on ? t("助手模型已切换为：{entry}", { entry: `${target.provider}/${entryKeyOf(target.entry)}` }) : t("助手模型已设为：跟随主模型"));
 
+	const setRepairForTarget = (target: AggregatedModelItem, on: boolean) =>
+		run(async () => {
+			const key = entryKeyOf(target.entry);
+			await apiPut("/api/config", { repairModel: on ? { provider: target.provider, entry: key } : null });
+			rpConfig.reload();
+			bumpWatchPanels();
+		}, on ? t("状态修改模型已开启") : t("状态修改模型将跟随主模型"));
+
 	return (
 		<div className="composer-model-wrap" ref={wrapRef}>
 			<button
@@ -899,6 +920,7 @@ export function ComposerModelSwitch({
 										btwEntry?.provider === mobileDetailItem.provider &&
 										btwEntry?.entry === entryKeyOf(mobileDetailItem.entry)
 									}
+									isRepair={repairEntry?.provider === mobileDetailItem.provider && repairEntry?.entry === entryKeyOf(mobileDetailItem.entry)}
 									liveThinking={
 										typeof mobileDetailItem.entry.thinkingLevel === "string" && mobileDetailItem.entry.thinkingLevel.trim()
 											? mobileDetailItem.entry.thinkingLevel.trim()
@@ -911,6 +933,7 @@ export function ComposerModelSwitch({
 									onPatchEntry={(patch) => void patchTargetEntry(mobileDetailItem, patch)}
 									onToggleSide={(on) => void setSideForTarget(mobileDetailItem, on)}
 									onToggleBtw={(on) => void setBtwForTarget(mobileDetailItem, on)}
+									onToggleRepair={(on) => void setRepairForTarget(mobileDetailItem, on)}
 									onUseModel={() => {
 										void selectModelEntry(mobileDetailItem.provider, mobileDetailItem.entry);
 										setOpen(false);
@@ -941,6 +964,7 @@ export function ComposerModelSwitch({
 												btwEntry?.provider === inspectTarget.provider &&
 												btwEntry?.entry === entryKeyOf(inspectTarget.entry)
 											}
+											isRepair={repairEntry?.provider === inspectTarget.provider && repairEntry?.entry === entryKeyOf(inspectTarget.entry)}
 											liveThinking={liveThinking}
 											busy={busy}
 											onSelectWithLevel={(lv) =>
@@ -949,6 +973,7 @@ export function ComposerModelSwitch({
 											onPatchEntry={(patch) => void patchTargetEntry(inspectTarget, patch)}
 											onToggleSide={(on) => void setSideForTarget(inspectTarget, on)}
 											onToggleBtw={(on) => void setBtwForTarget(inspectTarget, on)}
+											onToggleRepair={(on) => void setRepairForTarget(inspectTarget, on)}
 											onUseModel={() => void selectModelEntry(inspectTarget.provider, inspectTarget.entry)}
 										/>
 									</div>
@@ -1075,6 +1100,7 @@ export function ConnectEditorPane({
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
 	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
+	const repairEntry = rpConfig.data?.config?.repairModel ?? null;
 
 	const isGen = target.kind === "gen";
 	const isFile = target.kind === "file";
@@ -1324,6 +1350,7 @@ export function ConnectEditorPane({
 		const key = entryKeyOf(modelItem.entry);
 		const isSide = sideEntry?.provider === modelItem.provider && sideEntry?.entry === key;
 		const isBtw = btwEntry?.provider === modelItem.provider && btwEntry?.entry === key;
+		const isRepair = repairEntry?.provider === modelItem.provider && repairEntry?.entry === key;
 		const entryThinking =
 			(typeof modelItem.entry.thinkingLevel === "string" && modelItem.entry.thinkingLevel.trim()) ||
 			supportedLevelsOf(modelItem.entry)[0] ||
@@ -1363,6 +1390,13 @@ export function ConnectEditorPane({
 				bumpWatchPanels();
 			}, on ? t("助手模型已切换为：{entry}", { entry: `${modelItem.provider}/${key}` }) : t("助手模型已设为：跟随主模型"));
 
+		const toggleRepair = (on: boolean) =>
+			run(async () => {
+				await apiPut("/api/config", { repairModel: on ? { provider: modelItem.provider, entry: key } : null });
+				rpConfig.reload();
+				bumpWatchPanels();
+			}, on ? t("状态修改模型已开启") : t("状态修改模型将跟随主模型"));
+
 		return (
 			<aside className="rc-lore-picker conn-editor-sub" aria-label={key}>
 				<div className="panel-head rc-lore-picker-head">
@@ -1382,12 +1416,14 @@ export function ConnectEditorPane({
 						isCurrent={false}
 						isSide={isSide}
 						isBtw={isBtw}
+						isRepair={isRepair}
 						liveThinking={entryThinking}
 						busy={busy}
 						onSelectWithLevel={(lv) => void patchEntry({ thinkingLevel: lv })}
 						onPatchEntry={(patch) => void patchEntry(patch)}
 						onToggleSide={(on) => void toggleSide(on)}
 						onToggleBtw={(on) => void toggleBtw(on)}
+						onToggleRepair={(on) => void toggleRepair(on)}
 					/>
 				</div>
 			</aside>
@@ -1830,14 +1866,7 @@ export function ConnectPanel({
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
 	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
 
-const repairModel = rpConfig.data?.config?.repairModel ?? null;
-const saveRepairModel = (enabled: boolean) => run(async () => {
-  const model = enabled && activeConfig.defaultProvider && activeConfig.defaultModelEntry
-    ? { provider: activeConfig.defaultProvider, entry: activeConfig.defaultModelEntry }
-    : null;
-  await apiPut("/api/config", { repairModel: model });
-  rpConfig.reload();
-}, enabled ? t("状态修改模型已开启") : t("状态修改模型将跟随主模型"));
+	const repairEntry = rpConfig.data?.config?.repairModel ?? null;
 	const reloadAll = () => {
 		modelsData.reload();
 		agentCfg.reload();
@@ -1937,11 +1966,6 @@ const saveRepairModel = (enabled: boolean) => run(async () => {
 			</section>
 
 			{/* 下半区：所有模型（无选中勾，点击整行直接在右侧展开模型详情） */}
-<section className="sp-section conn-block">
-  <div className="conn-head-row"><span className="conn-section-label">{t("状态修改模型")}</span></div>
-  <label className="repair-model-setting"><span>{t("模型使用方式")}</span><select disabled={busy} value={repairModel ? "enabled" : "follow"} onChange={(event) => saveRepairModel(event.target.value === "enabled")}><option value="follow">{t("跟随主模型")}</option><option value="enabled" disabled={!activeConfig.defaultProvider || !activeConfig.defaultModelEntry}>{t("已开启")}</option></select></label>
-  <small>{t("已开启时使用模型配置中当前选中的模型")}</small>
-</section>
 			<section className="sp-section conn-block">
 				<div className="conn-head-row">
 					<span className="conn-section-label">{t("所有模型")}（{allItems.length}）</span>
@@ -1958,6 +1982,7 @@ const saveRepairModel = (enabled: boolean) => run(async () => {
 							const key = entryKeyOf(entry);
 							const isSide = sideEntry?.provider === pk && sideEntry?.entry === key;
 							const isBtw = btwEntry?.provider === pk && btwEntry?.entry === key;
+							const isRepair = repairEntry?.provider === pk && repairEntry?.entry === key;
 							const inspecting =
 								activeTarget?.kind === "model" &&
 								activeTarget.provider === pk &&
@@ -1977,6 +2002,7 @@ const saveRepairModel = (enabled: boolean) => run(async () => {
 									<span className="wb-model-row-name">{key}</span>
 									{isSide && <span className="wb-model-side-tag">{t("旁路")}</span>}
 									{isBtw && <span className="wb-model-side-tag">{t("助手")}</span>}
+									{isRepair && <span className="wb-model-side-tag">{t("状态修改")}</span>}
 									<span className="wb-model-row-prov">{pk}</span>
 									<IconChevronRight size={14} className="wb-panel-model-caret" />
 								</button>

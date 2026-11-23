@@ -83,6 +83,8 @@ import {
 } from "../src/paths.ts";
 import { seedBashDenylist } from "../src/bash-denylist.ts";
 import { seedRelayRules } from "../src/relay-rules.ts";
+import { migrateLegacyRepairPrompt, repairRulesContent } from "../src/repair-rules.ts";
+import { renderForModel } from "../src/prompt-entries.ts";
 import { applyPatch, defaultState, loadState, saveState } from "../src/state.ts";
 import { DEFAULT_CONFIG, type RpConfig, type WorldState } from "../src/types.ts";
 import {
@@ -199,7 +201,6 @@ const cwd = process.cwd();
 const productRoot = process.env.LIYUAN_PRODUCT_ROOT ?? cwd;
 // 扮演骨架播种（刀1，docs/PLAN-AGENT-SLOTS.md §七）：首次启动把随包的
 // assets/SYSTEM.md 落到 <agentDir>/SYSTEM.md；已存在不覆盖——改了就是用户的。
-seedStageSystemPrompt(productRoot, agentHome);
 seedBashDenylist(agentHome);
 seedRelayRules(agentHome);
 seedBuiltinSkills(cwd);
@@ -224,6 +225,7 @@ for (const line of migrateLegacyLayout(cwd)) {
 for (const line of applyPendingBackupRestore(cwd, agentHome)) {
 	console.log(`[liyuan] 恢复 ${line}`); // i18n-ignore：终端日志
 }
+migrateLegacyRepairPrompt(agentHome, resolveConfigPath(cwd));
 
 // 卡＝工作空间一次性迁移（刀4 尾巴）：旧扁平布局 → cards/ 两层布局。
 // plan 只读 → apply 动盘；幂等（cards/ 已在/搬过的不再搬），认不出卡的会话原地不动。
@@ -2834,7 +2836,7 @@ stage = new StageEngine({
     const mapped = applyEntryThinkingMap(base, entry);
     return { model: typeof entry.maxTokens === "number" && entry.maxTokens > 0 ? { ...mapped, maxTokens: entry.maxTokens } : mapped };
   },
-  getRepairPrompt: () => loadConfig(cwd).repairPrompt ?? "",
+  getRepairPrompt: () => renderForModel(repairRulesContent(agentHome)),
 	getSideEntry: sideEntryOf,
 	getThinking: () => session.thinkingLevel,
 	// 场记落盘 → fs.watch 自动广播 state 帧（与扩展/REST 写路径同一条）

@@ -335,7 +335,6 @@ export interface RpConfigView {
 	/** 旁路模型（记账/压缩）：指向连接配置里的一条模型条目；缺省=跟随剧情模型 */
 	sideModel?: { provider: string; entry: string };
 	repairModel?: { provider: string; entry: string } | null;
-	repairPrompt?: string;
 }
 
 export interface CardResponse {
@@ -553,13 +552,14 @@ export interface PresetBlocksResponse {
 	blocks: Array<PresetBlockView & { content?: string }>;
 }
 
-/** 用户提示词：SYSTEM.md（全局系统提示词）+ 全局追加三份（扮演 APPEND_SYSTEM.md / 写作模式 AGENT_APPEND_SYSTEM.md）+ 这张卡的 APPEND_SYSTEM.md */
+/** User prompts: system/global/card prompt files, including state-repair instructions. */
 export interface RulesResponse {
 	global: { content: string; path: string };
 	agent: { content: string; path: string };
 	btw?: { content: string; path: string };
 	card: { content: string; path: string; cardName: string };
 	system: { content: string; path: string };
+	repair: { content: string; path: string };
 }
 
 export interface RulesSaveResponse {

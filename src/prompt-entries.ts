@@ -129,12 +129,42 @@ export function renderForModel(md: string): string {
 	for (const e of entries) {
 		if (!e.enabled) continue;
 		const heading = e.name ? `${"#".repeat(e.level)} ${e.name}` : "";
-		out.push([heading, e.content].filter((s) => s.trim()).join("\n"));
+		const content = e.name.startsWith(REPAIR_MIGRATION_ENTRY_PREFIX) ? restoreRepairPromptMigration(e.content) : e.content;
+		out.push([heading, content].filter((s) => s.trim()).join("\n"));
 	}
 	return out.join("\n\n").trim();
 }
 
 // ---------------- harness 生成条目的形态（预设/世界书镜像共用） ----------------
+
+	
+const REPAIR_MIGRATION_ENTRY_PREFIX = "repairPrompt 迁移·";
+
+/** A legacy repair prompt is kept as one switchable entry; escape only parser control lines. */
+export function formatRepairPromptMigration(content: string, id: string): string {
+	const body = content.trim().split("\n").map((line) => {
+		if (/^＃{1,6}[ \t]/.test(line)) line = line.replace(/^＃+/, (hashes) => hashes + hashes);
+		else if (HEADING_RE.test(line)) line = line.replace(/^(#{1,6})/, (_match, hashes: string) => `${"＃".repeat(hashes.length)}§`);
+		if (isCommentLine(line, "＜!--")) line = line.replace("＜!--", "＜＜!--");
+		else if (isCommentLine(line, COMMENT_OPEN)) line = line.replace(COMMENT_OPEN, "＜!--");
+		if (isCommentLine(line, "--＞")) line = line.replace("--＞", "--＞＞");
+		else if (isCommentLine(line, COMMENT_CLOSE)) line = line.replace(COMMENT_CLOSE, "--＞");
+		return line;
+	}).join("\n");
+	return `## ${REPAIR_MIGRATION_ENTRY_PREFIX}${id}\n\n${body}\n`;
+}
+
+function restoreRepairPromptMigration(content: string): string {
+	return content.split("\n").map((line) => {
+		if (/^＃{1,6}§[ \t]/.test(line)) line = line.replace(/^＃{1,6}§/, (hashes) => "#".repeat(hashes.length - 1));
+		else if (/^＃{2,12}[ \t]/.test(line) && line.match(/^＃+/)![0].length % 2 === 0) line = line.replace(/^＃+/, (hashes) => "＃".repeat(hashes.length / 2));
+		if (isCommentLine(line, "＜＜!--")) line = line.replace("＜＜!--", "＜!--");
+		else if (isCommentLine(line, "＜!--")) line = line.replace("＜!--", COMMENT_OPEN);
+		if (isCommentLine(line, "--＞＞")) line = line.replace("--＞＞", "--＞");
+		else if (isCommentLine(line, "--＞")) line = line.replace("--＞", COMMENT_CLOSE);
+		return line;
+	}).join("\n");
+}
 
 /** 条目正文里的 markdown 标题行转全角＃：视觉不变，但不再被条目解析器当成新条目割裂 */
 export const escapeEntryText = (text: string): string => text.replace(/^(#{1,6})(\s)/gm, "＃$2");

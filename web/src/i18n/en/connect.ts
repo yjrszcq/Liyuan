@@ -90,6 +90,7 @@ export const connect: Record<string, string> = {
 	"上下文窗口": "Context window",
 	"应用": "Apply",
 	"设为旁路模型": "Use as side model",
+	"设为状态修改模型": "Use as state-modification model",
 	"已开启": "Enabled",
 	"跟随主模型": "Follows main model",
 	"切换为此模型": "Switch to this model",

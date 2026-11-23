@@ -15,6 +15,8 @@
    `（预设）` 条目），条目来源标注（`（预设）` / `（世界书·书名）`）与来源书卸载跟随见
    `docs/PLAN-PRESET-HARNESS-STRIP.md` 状态末条。工坊功能通道（`/api/card/authoring`）不动。
    `docs/PLAN-RP-AGENT-EXEC.md` 与 `docs/PRESET-SPLIT-TAXONOMY.md` 保留为历史计划与研究资料。
+5. 做功能或界面改动前，先查找并优先复用项目已有的交互、实现和配置方式。
+   确认确实没有合适的现成方式后才自创。
 
 ## 快速索引
 
