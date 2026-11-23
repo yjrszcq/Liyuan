@@ -32,6 +32,16 @@ test("looksLikeHtmlDocument", () => {
 	assert.equal(looksLikeHtmlDocument("not html"), false);
 });
 
+test("短 body 脚本与缩进围栏的界面各自成帧", () => {
+	const text = '叙事\n  ```\n<body>\n<script>$("body").load("https://example.com/ui")</script>\n</body>\n  ```\n```html\n<!DOCTYPE html><html><body>说明</body></html>\n```';
+	const parts = splitHtmlParts(text);
+	assert.equal(parts[0].kind, "text");
+	assert.equal(parts[1].kind, "html");
+	assert.equal(parts[2].kind, "html");
+	if (parts[1].kind === "html") assert.equal(parts[1].scripts, true);
+	if (parts[2].kind === "html") assert.match(parts[2].html, /说明/);
+});
+
 test("splitHtmlParts: 正文中的顶层 <div> 块切为 html 段(皮肤产物形态)", () => {
 	const text = '雨停了。\n<div style="x">\n<status>\nHP: 80\n</status>\n</div>\n她抬头。';
 	const p = splitHtmlParts(text);

@@ -41,8 +41,9 @@ function bodyIsSingleCompleteDoc(body: string): boolean {
 	}
 	if (count === 1) return body.slice(lastEnd).trim() === "";
 	if (count === 0) {
-		// 无 doctype 的大块 UI 根：首个合法闭合即可
-		return body.length >= 200 && /<\/(div|section|body)>/i.test(body);
+		// 完整 body 也是文档，即使只是加载外部界面的短脚本。
+		return (/^\s*<body(?:\s[^>]*)?>/i.test(body) && /<\/body\s*>\s*$/i.test(body)) ||
+			(body.length >= 200 && /<\/(div|section|body)>/i.test(body));
 	}
 	return false;
 }
@@ -63,7 +64,7 @@ export function findFencedHtmlDocument(
 	text: string,
 ): { html: string; scripts: boolean; start: number; end: number } | null {
 	if (!text) return null;
-	const openRe = /(^|\n)(```([^\n`]*)\r?\n)/g;
+	const openRe = /(^|\n)([ \t]*```([^\n`]*)\r?\n)/g;
 	let om: RegExpExecArray | null;
 	while ((om = openRe.exec(text)) !== null) {
 		const fenceStart = om.index + om[1].length;
@@ -77,12 +78,12 @@ export function findFencedHtmlDocument(
 		// 标记语言判据（语法，非标签名单——见 src/htmlMarkup.ts）
 		if (!startsWithMarkup(probe)) continue;
 		// 非完整文档（无 doctype/html 外壳的界面片段）沿用原有体量下限
-		if (!probe.startsWith("<!doctype html") && !probe.startsWith("<html") && text.length < 200) {
+		if (!probe.startsWith("<!doctype html") && !probe.startsWith("<html") && !/^<body(?:\s|>)/i.test(probe) && text.length < 200) {
 			continue;
 		}
 		const rest = text.slice(contentStart);
 		// 收集合法闭合：优先单文档首闭，否则末闭
-		const closeRe = /\r?\n```[ \t]*(?=\r?\n|$)/g;
+		const closeRe = /\r?\n[ \t]*```[ \t]*(?=\r?\n|$)/g;
 		let cm: RegExpExecArray | null;
 		let firstSingleClose = -1;
 		let firstSingleEnd = -1;
@@ -90,7 +91,7 @@ export function findFencedHtmlDocument(
 		let lastEnd = -1;
 		while ((cm = closeRe.exec(rest)) !== null) {
 			const body = rest.slice(0, cm.index);
-			if (!/<\/html\s*>/i.test(body) && !(body.length >= 200 && /<\/(div|section|body)>/i.test(body))) {
+			if (!/<\/html\s*>/i.test(body) && !bodyIsSingleCompleteDoc(body)) {
 				continue;
 			}
 			lastClose = cm.index;
@@ -106,7 +107,7 @@ export function findFencedHtmlDocument(
 		const html = rest.slice(0, bestClose).replace(/^\uFEFF/, "").trim();
 		if (!html) continue;
 		const isDoc = looksLikeHtmlDocument(html);
-		const isUiRoot = startsWithMarkup(html) && html.length >= 200;
+		const isUiRoot = startsWithMarkup(html) && (html.length >= 200 || bodyIsSingleCompleteDoc(html));
 		if (!isDoc && !isUiRoot) continue;
 		const scripts = htmlLooksInteractive(html) || /\bscripts?\b|\bjs\b|\+/i.test(lang);
 		return {

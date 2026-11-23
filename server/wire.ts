@@ -105,6 +105,8 @@ export interface WireMsg {
 	/** 发言者显示名（narrative/greeting 为角色名，user 为用户名） */
 	name?: string;
 	text: string;
+	/** 供卡脚本读取的角色消息原文，不用于显示。 */
+	rawText?: string;
 	/** 模型思维链（原始输出，UI 折叠呈现；无则缺省） */
 	thinking?: string;
 	/**
@@ -631,6 +633,7 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 			channel,
 			name: names.charName,
 			text: body,
+			...(channel === "narrative" && text !== body ? { rawText: text } : {}),
 			...(thinking ? { thinking } : {}),
 			...(timeline ? { timeline } : {}),
 			...(notes && notes.length > 0 ? { notes } : {}),
@@ -649,10 +652,12 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 			const index = typeof pick?.index === "number" && Number.isFinite(pick.index) ? Math.max(0, pick.index) : undefined;
 			const total = typeof pick?.total === "number" && Number.isFinite(pick.total) ? Math.max(0, pick.total) : undefined;
 			// 先皮肤（开局占位→HTML）再策略；已是 HTML 载荷则不再 unwrap
+			const display = prepareDisplayText(text, skin);
 			return {
 				channel: "greeting",
 				name: names.charName,
-				text: prepareDisplayText(text, skin),
+				text: display,
+				...(display !== text ? { rawText: text } : {}),
 				...(index !== undefined && total !== undefined && total > 0
 					? { greetingPick: { index, total } }
 					: {}),
@@ -660,7 +665,9 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 		}
 		/** 用户手改后的角色回复：显示同叙事通道 */
 		if (msg.customType === "rp-edited-reply") {
-			return text ? { channel: "narrative", name: names.charName, text: prepareDisplayText(text, skin) } : null;
+			if (!text) return null;
+			const display = prepareDisplayText(text, skin);
+			return { channel: "narrative", name: names.charName, text: display, ...(display !== text ? { rawText: text } : {}) };
 		}
 		if (msg.customType === "rp-import") {
 			return text ? { channel: "import", text: prepareDisplayText(text, skin) } : null;
@@ -763,6 +770,9 @@ export function foldTurnNarratives(msgs: WireMsg[]): WireMsg[] {
 		out[slot] = {
 			...prev,
 			text: join(prev.text, m.text),
+			...(prev.rawText !== undefined || m.rawText !== undefined
+				? { rawText: join(prev.rawText ?? prev.text, m.rawText ?? m.text) }
+				: {}),
 			...(thinking ? { thinking } : {}),
 			// 变体元数据以最后一段为准（annotateSwipes 挂在末条）
 			...(m.swipe ? { swipe: m.swipe } : prev.swipe ? { swipe: prev.swipe } : {}),

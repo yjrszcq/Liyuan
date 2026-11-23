@@ -20,6 +20,14 @@ test("user 消息 → user 通道，带用户名", () => {
 	});
 });
 
+test("显示皮肤改变正文时保留卡脚本读取的原文", () => {
+	const text = "故事\n<option>A</option>";
+	const skin = { rules: [{ find: /<option>[\s\S]*?<\/option>/g, replace: "界面" }], charName: "青梧", userName: "旅人" };
+	const msg = toWireMsg({ role: "custom", customType: "rp-greeting", content: text }, names, { skin });
+	assert.equal(msg?.rawText, text);
+	assert.notEqual(msg?.text, text);
+});
+
 test("assistant 正文 → narrative 通道；thinking 提取为折叠字段", () => {
 	const msg = {
 		role: "assistant",

@@ -813,7 +813,7 @@ welcomeRef.current = welcome;
 			.filter((m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting")
 			.map((m, idx) => {
 				const isGreeting = idx === 0 && m.channel === "greeting";
-				const swipes = isGreeting && cardGreetings.length > 0 ? cardGreetings : [m.text];
+				const swipes = isGreeting && cardGreetings.length > 0 ? cardGreetings : [m.rawText ?? m.text];
 				const swipeId = isGreeting ? (m.greetingPick?.index ?? cardGreetingIndex ?? 0) : (m.swipe?.index ?? 0);
 				return {
 					message_id: idx,
@@ -821,9 +821,9 @@ welcomeRef.current = welcome;
 					role: (m.channel === "user" ? "user" : "assistant") as "user" | "assistant",
 					channel: m.channel,
 					name: m.name ?? (m.channel === "user" ? userName : charName),
-					message: m.text,
-					mes: m.text,
-					text: m.text,
+					message: m.rawText ?? m.text,
+					mes: m.rawText ?? m.text,
+					text: m.rawText ?? m.text,
 					swipe_id: swipeId,
 					swipes,
 				};
