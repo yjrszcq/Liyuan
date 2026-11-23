@@ -21,7 +21,8 @@
 			/* 尽早应用主题，避免白昼闪一下 */
 			try {
 				var t = localStorage.getItem("liyuan.theme");
-				if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+				if (t !== "dark" && t !== "light") t = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+				document.documentElement.setAttribute("data-theme", t);
 			} catch (e) {}
 			/* rebuild 后 SW 若仍用旧 HTML 指已删 JS，会白屏：探测 root 为空则卸 SW 强刷一次 */
 			window.addEventListener("load", function () {
@@ -52,7 +53,7 @@
 				}, 2500);
 			});
 		</script>
-		<script type="module" crossorigin src="/assets/index-C77ZE7U0.js"></script>
+		<script type="module" crossorigin src="/assets/index-CKKr882g.js"></script>
 		<link rel="stylesheet" crossorigin href="/assets/index-6CBnc_jq.css">
 	</head>
 	<body>

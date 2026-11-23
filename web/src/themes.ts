@@ -91,10 +91,11 @@ export function getActiveThemeId(): string {
 		if (saved && THEME_LIST.some((t) => t.id === saved)) return saved;
 		const legacy = localStorage.getItem("liyuan.theme");
 		if (legacy === "dark") return "xuanhei";
+		if (legacy === "light") return "zhusha";
 	} catch {
 		// ignore
 	}
-	return "zhusha";
+	return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "xuanhei" : "zhusha";
 }
 
 export function getActiveTheme(): ThemeDef {
@@ -102,7 +103,7 @@ export function getActiveTheme(): ThemeDef {
 	return THEME_LIST.find((t) => t.id === id) || THEME_LIST[0];
 }
 
-export function applyThemeById(id: string): void {
+export function applyThemeById(id: string, persist = true): void {
 	const target = THEME_LIST.find((t) => t.id === id) || THEME_LIST[0];
 	document.documentElement.setAttribute("data-theme-id", target.id);
 	document.documentElement.setAttribute("data-theme", target.isDark ? "dark" : "light");
@@ -110,11 +111,13 @@ export function applyThemeById(id: string): void {
 	const meta = document.querySelector('meta[name="theme-color"]');
 	if (meta) meta.setAttribute("content", target.bg);
 
-	try {
-		localStorage.setItem(THEME_ID_KEY, target.id);
-		localStorage.setItem("liyuan.theme", target.isDark ? "dark" : "light");
-	} catch {
-		// ignore
+	if (persist) {
+		try {
+			localStorage.setItem(THEME_ID_KEY, target.id);
+			localStorage.setItem("liyuan.theme", target.isDark ? "dark" : "light");
+		} catch {
+			// ignore
+		}
 	}
 	try {
 		window.dispatchEvent(new CustomEvent("liyuan:theme-change", { detail: { id: target.id, isDark: target.isDark } }));

@@ -2,7 +2,7 @@
  * 外观主题面板：实时预览窗口、主题色盘选择、自定义壁纸与自定义 CSS（复刻 WorkBuddy 视觉体验）
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	THEME_LIST,
 	getActiveThemeId,
@@ -46,6 +46,11 @@ const SAMPLE_WALLPAPERS = [
 export function ThemePanel({ toast }: ThemePanelProps) {
 	const [activeId, setActiveId] = useState<string>(() => getActiveThemeId());
 	const activeTheme = THEME_LIST.find((t) => t.id === activeId) || THEME_LIST[0];
+	useEffect(() => {
+		const sync = () => setActiveId(getActiveThemeId());
+		window.addEventListener("liyuan:theme-change", sync);
+		return () => window.removeEventListener("liyuan:theme-change", sync);
+	}, []);
 
 	// 背景壁纸状态
 	const [wallpaper, setWallpaper] = useState<WallpaperConfig | null>(() => getWallpaperConfig());

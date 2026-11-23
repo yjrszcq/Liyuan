@@ -34,7 +34,10 @@ export function setTheme(mode: ThemeMode): void {
 /** 启动时尽早调用，避免白闪 */
 export function initTheme(): ThemeMode {
 	const id = getActiveThemeId();
-	applyThemeById(id);
+	applyThemeById(id, false);
+	window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+		applyThemeById(getActiveThemeId(), false);
+	});
 	applyWallpaper(getWallpaperConfig());
 	applyCustomCss(getCustomCss());
 	return getActiveTheme().isDark ? "dark" : "light";
