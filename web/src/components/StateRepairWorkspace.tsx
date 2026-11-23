@@ -12,6 +12,10 @@ type Proposal = { token: string; changes: Change[]; evidence: Evidence[]; applie
 type RepairMessage = { role: "user" | "assistant"; text: string; thinking?: string; proposal?: Proposal };
 type RepairChat = { id: string; title: string; messages: RepairMessage[] };
 
+function expirePendingProposals(chats: RepairChat[]): RepairChat[] {
+  return chats.map((chat) => ({ ...chat, messages: chat.messages.map((message) => message.proposal && !message.proposal.applied && !message.proposal.expired ? { ...message, proposal: { ...message.proposal, expired: true } } : message) }));
+}
+
 export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onExit, onApplied }: {
   sessionId: string;
   setInput: (text: string) => void;
@@ -118,7 +122,7 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
       }
       if (!result?.chat) throw new Error(result?.reason || t("修复提案已失效"));
       if (epoch.current !== version) return;
-      setChats((items) => items.map((chat) => chat.id === id ? result!.chat! : chat));
+      setChats((items) => expirePendingProposals(items).map((chat) => chat.id === id ? result!.chat! : chat));
     } catch (error) {
       if (epoch.current === version) {
         toast("error", error instanceof Error ? error.message : String(error));
@@ -135,7 +139,7 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
     try {
       const result = await apiPost<{ chat: RepairChat }>("/api/state/repair/rewind", { id, sessionId: parentSessionId, index });
       if (epoch.current !== version || id !== chatIdRef.current) return;
-      setChats((items) => items.map((chat) => chat.id === id ? result.chat : chat));
+      setChats((items) => expirePendingProposals(items).map((chat) => chat.id === id ? result.chat : chat));
       setEditing(null);
       toast("info", t("已回退；后续对话已截断，已应用的账本修改不变。"));
     } catch (error) { if (epoch.current === version) toast("error", error instanceof Error ? error.message : String(error)); }
