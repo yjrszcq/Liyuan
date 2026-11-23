@@ -12220,6 +12220,9 @@ html[data-has-wallpaper="true"] .composer-box {
 	overflow: auto;
 	gap: 12px;
 }
+.repair-message-row { display: flex; flex-direction: column; max-width: 92%; min-width: 0; }
+.repair-row-user { align-self: flex-end; align-items: flex-end; }
+.repair-row-assistant { align-self: flex-start; align-items: flex-start; }
 .repair-message {
 	max-width: 92%;
 	padding: 10px 12px;
@@ -12228,14 +12231,17 @@ html[data-has-wallpaper="true"] .composer-box {
 	background: var(--surface);
 	color: var(--text-strong);
 }
+.repair-message-row > .repair-message { max-width: 100%; }
 .repair-user { align-self: flex-end; background: var(--accent-wash); }
 .repair-assistant { align-self: flex-start; }
 .repair-assistant > .info-line { max-width: none; overflow-wrap: anywhere; }
 .repair-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.repair-message-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.repair-message-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .repair-action { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid var(--hairline); border-radius: 6px; background: transparent; color: var(--text-soft); font: inherit; font-size: 11px; cursor: pointer; }
 .repair-action:hover:not(:disabled) { color: var(--text-strong); border-color: var(--hairline-strong); }
 .repair-action:disabled { opacity: .5; cursor: default; }
+.repair-icon-action { padding: 6px; border-color: transparent; }
+.repair-icon-action:hover:not(:disabled) { border-color: transparent; background: var(--accent-wash); }
 .repair-edit-input { display: block; width: 100%; min-width: 0; min-height: 90px; padding: 8px; border: 1px solid var(--hairline-strong); border-radius: 8px; background: var(--surface); color: var(--text-strong); font: inherit; resize: vertical; }
 .repair-edit-input:focus-visible { outline: none; border-color: var(--accent); }
 .repair-proposal { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--hairline-strong); }

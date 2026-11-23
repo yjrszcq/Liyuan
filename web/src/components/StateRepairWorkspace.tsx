@@ -191,23 +191,25 @@ export function StateRepairWorkspace({ sessionId, setInput, sendRef, toast, onEx
       {activeChat?.messages.map((message, index) => {
         let sourceUserIndex = -1;
         for (let i = index; i >= 0; i--) if (activeChat.messages[i].role === "user") { sourceUserIndex = i; break; }
-        return <article key={`${activeChat.id}-${index}`} className={`repair-message repair-${message.role}`}>
+        return <div key={`${activeChat.id}-${index}`} className={`repair-message-row repair-row-${message.role}`}>
+        <article className={`repair-message repair-${message.role}`}>
         {message.thinking && <ThinkingBlock text={message.thinking} />}
         {editing?.index === index && message.role === "user" ? <textarea autoFocus className="repair-edit-input" value={editing.text} disabled={busy} onChange={(event) => setEditing({ index, text: event.target.value })} /> : message.text && <div className="repair-message-text">{message.role === "assistant" ? renderMarkdown(message.text) : message.text}</div>}
+        {message.proposal && <section className="repair-proposal"><strong>{t("待确认的状态提案")}</strong><ul>{message.proposal.changes.map((change, i) => <li key={`${change.path}-${i}`}><code>{change.path}</code><div><del>{JSON.stringify(change.before)}</del><span> → </span><ins>{JSON.stringify(change.after)}</ins></div></li>)}</ul>
+          {message.proposal.evidence?.length > 0 && <div className="repair-evidence"><strong>{t("依据")}</strong>{message.proposal.evidence.map((item, i) => <blockquote key={i}><span>{item.source === "story" ? t("剧情证据") : item.source === "instruction" ? t("指令依据") : item.source}</span>{item.quote}</blockquote>)}</div>}
+          <button className="drawer-btn primary" type="button" disabled={busy || message.proposal.applied || message.proposal.expired} onClick={() => void apply(message.proposal!.token)}>{message.proposal.applied ? t("已应用") : message.proposal.expired ? t("已失效") : t("确认应用修改")}</button></section>}
+      </article>
         <div className="repair-message-actions">
-          {message.text && <button type="button" className="repair-action" disabled={busy} onClick={() => void copyMessage(message.text)}><IconCopy size={13} /> {t("复制")}</button>}
+          {message.text && <button type="button" className="repair-action repair-icon-action" title={t("复制")} aria-label={t("复制")} disabled={busy} onClick={() => void copyMessage(message.text)}><IconCopy size={16} /></button>}
           {message.role === "user" ? editing?.index === index ? <>
             <button type="button" className="repair-action" disabled={busy || !editing.text.trim()} onClick={confirmEdit}>{t("确认修改并重新生成")}</button>
             <button type="button" className="repair-action" disabled={busy} onClick={() => setEditing(null)}>{t("取消")}</button>
           </> : <>
-            <button type="button" className="repair-action" disabled={busy} onClick={() => setEditing({ index, text: message.text })}><IconPencil size={13} /> {t("修改并重新生成")}</button>
-            <button type="button" className="repair-action" disabled={busy} onClick={() => void rewind(index)}><IconUndo size={13} /> {t("回退到此消息前")}</button>
-          </> : sourceUserIndex >= 0 && <button type="button" className="repair-action" disabled={busy} onClick={() => { if (window.confirm(t("重新生成此回复？该回复及后续对话将被截断，已应用的账本修改不会撤销。"))) void submit(activeChat.messages[sourceUserIndex].text, sourceUserIndex); }}><IconRefresh size={13} /> {t("重新生成")}</button>}
+            <button type="button" className="repair-action repair-icon-action" title={t("修改并重新生成")} aria-label={t("修改并重新生成")} disabled={busy} onClick={() => setEditing({ index, text: message.text })}><IconPencil size={16} /></button>
+            <button type="button" className="repair-action repair-icon-action" title={t("回退到此消息前")} aria-label={t("回退到此消息前")} disabled={busy} onClick={() => void rewind(index)}><IconUndo size={16} /></button>
+          </> : sourceUserIndex >= 0 && <button type="button" className="repair-action repair-icon-action" title={t("重新生成")} aria-label={t("重新生成")} disabled={busy} onClick={() => { if (window.confirm(t("重新生成此回复？该回复及后续对话将被截断，已应用的账本修改不会撤销。"))) void submit(activeChat.messages[sourceUserIndex].text, sourceUserIndex); }}><IconRefresh size={16} /></button>}
         </div>
-        {message.proposal && <section className="repair-proposal"><strong>{t("待确认的状态提案")}</strong><ul>{message.proposal.changes.map((change, i) => <li key={`${change.path}-${i}`}><code>{change.path}</code><div><del>{JSON.stringify(change.before)}</del><span> → </span><ins>{JSON.stringify(change.after)}</ins></div></li>)}</ul>
-          {message.proposal.evidence?.length > 0 && <div className="repair-evidence"><strong>{t("依据")}</strong>{message.proposal.evidence.map((item, i) => <blockquote key={i}><span>{item.source === "story" ? t("剧情证据") : item.source === "instruction" ? t("指令依据") : item.source}</span>{item.quote}</blockquote>)}</div>}
-          <button className="drawer-btn primary" type="button" disabled={busy || message.proposal.applied || message.proposal.expired} onClick={() => void apply(message.proposal!.token)}>{message.proposal.applied ? t("已应用") : message.proposal.expired ? t("已失效") : t("确认应用修改")}</button></section>}
-      </article>; })}
+      </div>; })}
       {pending && pending.id === chatId && <>
         <article className="repair-message repair-user"><div className="repair-message-text">{pending.text}</div></article>
         <article className="repair-message repair-assistant">
