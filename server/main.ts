@@ -18,7 +18,7 @@ import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocketServer, type WebSocket } from "ws";
-import { createRepairChat as createPersistentRepairChat, deleteRepairChat as deletePersistentRepairChat, deleteRepairChatsForSessionPath, listRepairChats, markRepairProposalApplied, saveRepairChats } from "../src/state-repair-chats.ts";
+import { createRepairChat as createPersistentRepairChat, createRepairChatHistory, deleteRepairChat as deletePersistentRepairChat, deleteRepairChatsForSessionPath, listRepairChats, markRepairProposalApplied, markRepairProposalExpired, saveRepairChats } from "../src/state-repair-chats.ts";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
@@ -1820,15 +1820,19 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 		maxTokens: typeof m.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : undefined,
 	};
 };
-const assertRepairParentSession = (expectedSessionId: string): string => {
-  const activeSessionId = session.sessionManager.getSessionId();
-  if (!expectedSessionId || expectedSessionId !== activeSessionId) throw new Error(t("扮演会话已切换，请刷新状态修改会话列表后重试。"));
-  return activeSessionId;
-};
+const repairChatHistory = createRepairChatHistory({
+  cwd,
+  getSessionId: () => session.sessionManager.getSessionId(),
+  isStreaming: () => session.isStreaming || stage.isStreaming,
+  newChatTitle: () => t("新建状态修改"),
+  invalidateProposal: () => stage.invalidateStateRepair(),
+  propose: (id, text, history, onDelta) => stage.proposeStateRepair(id, text, history, onDelta),
+});
+const assertRepairParentSession = repairChatHistory.assertWritable;
 const restHost: RestHost = {
 	cwd,
-	isStreaming: () => session.isStreaming || stage.isStreaming,
-  repairChats: () => ({ chats: listRepairChats(cwd, session.sessionManager.getSessionId(), t("新建状态修改")) }),
+	isStreaming: () => session.isStreaming || stage.isStreaming || repairChatHistory.isRunning(),
+  repairChats: () => ({ chats: repairChatHistory.reconcileProposalExpiry(session.sessionManager.getSessionId(), stage.stateRepairProposalStatus()) }),
   createRepairChat: (expectedSessionId) => ({ chat: createPersistentRepairChat(cwd, assertRepairParentSession(expectedSessionId), t("新建状态修改")) }),
   deleteRepairChat: (id, expectedSessionId) => {
     const sessionId = assertRepairParentSession(expectedSessionId);
@@ -1844,42 +1848,18 @@ const restHost: RestHost = {
     saveRepairChats(cwd, sessionId, chats);
     return { chat };
   },
-  repairTurn: async (id, text, expectedSessionId, onDelta) => {
-    const sessionId = assertRepairParentSession(expectedSessionId);
-    const chats = listRepairChats(cwd, sessionId, t("新建状态修改"));
-    const chat = chats.find((item) => item.id === id);
-    if (!chat) throw new Error(t("状态修改会话不存在。"));
-    const message = text.trim();
-    if (!message || message.length > 2_000) throw new Error(t("请填写 1–{max} 字符的状态修改说明。", { max: 2_000 }));
-    chat.messages.push({ role: "user", text: message });
-    if (chat.messages.length === 1 && chat.title === t("新建状态修改")) chat.title = message.slice(0, 48);
-    saveRepairChats(cwd, sessionId, chats);
-    const history = chat.messages.filter((item) => item.role === "user" || item.role === "assistant").map(({ role, text: content }) => ({ role, text: content }));
-    let thinking = "";
-    const result = await stage.proposeStateRepair(id, message, history, (kind, delta) => {
-      if (kind === "thinking") thinking += delta;
-      onDelta?.(kind, delta);
-    });
-    if (session.sessionManager.getSessionId() !== sessionId) return { kind: "invalid", reason: t("剧情会话已切换，本次提案未保存。") };
-    const latest = listRepairChats(cwd, sessionId, t("新建状态修改"));
-    const target = latest.find((item) => item.id === id);
-    if (!target) return { kind: "invalid", reason: t("状态修改会话已删除，本次提案未保存。") };
-    const assistantThinking = thinking || undefined;
-    if (result.kind === "proposal") {
-      const token = (result as typeof result & { token: string }).token;
-      target.messages.push({ role: "assistant", text: t("已生成状态修改提案，请核对差异与证据后确认应用。"), ...(assistantThinking ? { thinking: assistantThinking } : {}), proposal: { token, changes: result.changes, evidence: result.repair.evidence } });
-    } else {
-      target.messages.push({ role: "assistant", text: result.kind === "clarification" ? result.question : result.kind === "answer" ? `${t("只读答复，未生成修改提案。")}\n\n${result.text}` : result.reason, ...(assistantThinking ? { thinking: assistantThinking } : {}) });
-    }
-    saveRepairChats(cwd, sessionId, latest);
-    return { chat: target };
-  },
+  rewindRepairChat: repairChatHistory.rewindRepairChat,
+  repairTurn: repairChatHistory.repairTurn,
   applyRepairChat: (id, token, expectedSessionId) => {
     const sessionId = assertRepairParentSession(expectedSessionId);
-    const chat = listRepairChats(cwd, sessionId, t("新建状态修改")).find((item) => item.id === id);
-    if (!chat || !chat.messages.some((message) => message.proposal?.token === token)) return { ok: false, reason: t("修复提案已失效，请重新分析。") };
+    if (!repairChatHistory.canApplyProposal(id, token, sessionId)) return { ok: false, expired: true, reason: t("修复提案已失效，请重新分析。") };
     const result = stage.applyStateRepair(id, token);
-    if (!result.ok) return result;
+    if (!result.ok) {
+      if (result.expired) {
+        try { markRepairProposalExpired(cwd, sessionId, id, token, t("新建状态修改")); } catch { /* The returned expiry still lets the client disable this proposal. */ }
+      }
+      return result;
+    }
     let persistenceWarning = false;
     try {
       persistenceWarning = !markRepairProposalApplied(cwd, sessionId, id, token, t("新建状态修改"));

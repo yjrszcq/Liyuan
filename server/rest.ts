@@ -257,6 +257,12 @@ interface ProviderRuntimeSnapshot {
 	}>;
 }
 
+export type RepairChatView = {
+  id: string;
+  title: string;
+  messages: Array<{ role: "user" | "assistant"; text: string; proposal?: { token: string; changes: unknown[]; evidence: unknown[]; applied?: boolean; expired?: boolean } }>;
+};
+
 export interface RestHost {
 	cwd: string;
 	isStreaming(): boolean;
@@ -320,11 +326,12 @@ export interface RestHost {
 	readSessionFile(path: string): Promise<string>;
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
   /** Client-supplied parent ID is an expectation only; main validates it against the active session. */
-  repairChats(): { chats: Array<{ id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string; proposal?: { token: string; changes: unknown[]; evidence: unknown[] } }> }> };
-  createRepairChat(expectedSessionId: string): { chat: { id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string }> } };
+  repairChats(): { chats: RepairChatView[] };
+  createRepairChat(expectedSessionId: string): { chat: RepairChatView };
   deleteRepairChat(id: string, expectedSessionId: string): { ok: true };
-  renameRepairChat(id: string, title: string, expectedSessionId: string): { chat: { id: string; title: string; messages: Array<{ role: "user" | "assistant"; text: string }> } };
-  repairTurn(id: string, text: string, expectedSessionId: string, onDelta?: (kind: "thinking" | "text", delta: string) => void): Promise<unknown>;
+  renameRepairChat(id: string, title: string, expectedSessionId: string): { chat: RepairChatView };
+  rewindRepairChat(id: string, index: number, expectedSessionId: string): { chat: RepairChatView };
+  repairTurn(id: string, text: string, expectedSessionId: string, onDelta?: (kind: "thinking" | "text", delta: string) => void, index?: number): Promise<unknown>;
   applyRepairChat(id: string, token: string, expectedSessionId: string): unknown;
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
 	refreshState(requestId?: string): Promise<{ kind: "applied" | "skipped" | "stale" | "failed"; message?: string }>;
@@ -3464,23 +3471,36 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
         sendJson(res, 200, host.deleteRepairChat(id, sessionId));
         return true;
       }
+      case "POST /api/state/repair/rewind": {
+        if (refuseWhileStreaming()) return true;
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; index?: unknown; sessionId?: unknown };
+        if (typeof body.id !== "string" || !body.id) throw new Error(t("缺少修改会话 id"));
+        if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        if (typeof body.index !== "number" || !Number.isInteger(body.index) || body.index < 0) throw new Error(t("请选择有效的用户消息。"));
+        sendJson(res, 200, host.rewindRepairChat(body.id, body.index, body.sessionId));
+        return true;
+      }
       case "POST /api/state/repair/turn": {
         if (refuseWhileStreaming()) return true;
-        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown };
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown; index?: unknown };
         if (typeof body.id !== "string" || typeof body.text !== "string") throw new Error(t("缺少修改会话或消息"));
         if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
-        sendJson(res, 200, await host.repairTurn(body.id, body.text, body.sessionId));
+        const index = body.index;
+        if (index !== undefined && (typeof index !== "number" || !Number.isInteger(index) || index < 0)) throw new Error(t("请选择有效的用户消息。"));
+        sendJson(res, 200, await host.repairTurn(body.id, body.text, body.sessionId, undefined, typeof index === "number" ? index : undefined));
         return true;
       }
       case "POST /api/state/repair/turn/stream": {
         if (refuseWhileStreaming()) return true;
-        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown };
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; text?: unknown; sessionId?: unknown; index?: unknown };
         if (typeof body.id !== "string" || typeof body.text !== "string") throw new Error(t("缺少修改会话或消息"));
         if (typeof body.sessionId !== "string" || !body.sessionId) throw new Error(t("缺少扮演会话 id"));
+        const index = body.index;
+        if (index !== undefined && (typeof index !== "number" || !Number.isInteger(index) || index < 0)) throw new Error(t("请选择有效的用户消息。"));
         res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no" });
         const emit = (event: unknown) => { if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`); };
         try {
-          const result = await host.repairTurn(body.id, body.text, body.sessionId, (kind, delta) => emit({ type: "delta", kind, delta }));
+          const result = await host.repairTurn(body.id, body.text, body.sessionId, (kind, delta) => emit({ type: "delta", kind, delta }), typeof index === "number" ? index : undefined);
           emit({ type: "result", result });
         } catch (error) {
           emit({ type: "error", error: error instanceof Error ? error.message : String(error) });

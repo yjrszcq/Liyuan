@@ -196,8 +196,42 @@ test("状态问答读取当前账本，不写入分支或创建提案", async ()
 		const result = await engine.proposeStateRepair("test-chat", "看看现在的状态", [{ role: "user", text: "看看现在的状态" }]);
 		assert.deepEqual(result, { kind: "answer", text: "当前位置是旧桥，随身带着怀表。" });
 		assert.equal(sm.getLeafId(), leaf);
-		assert.equal(engine.applyStateRepair("test-chat", "nonexistent").ok, false);
+		assert.deepEqual(engine.applyStateRepair("test-chat", "nonexistent"), { ok: false, expired: true, reason: "修复提案已失效，请重新分析。" });
 	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("状态修复：忙碌错误可重试，不将当前提案标为失效", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	const authGate = Promise.withResolvers<void>();
+	let blockAuth = false;
+	try {
+		reg.setResponses([
+			...directBeat("她站在旧桥上。"),
+			fauxAssistantMessage(JSON.stringify({ patch: { location: "新桥" }, evidence: [{ source: "instruction", quote: "地点改为新桥" }] })),
+			fauxAssistantMessage(JSON.stringify({ patch: {} })),
+		]);
+		const model = reg.getModel("faux-rp");
+		const engine = await makePiEngine({
+			cwd, sessionManager: sm, getModel: () => model,
+			getAuth: async () => { if (blockAuth) await authGate.promise; return {}; },
+			sideStreamFn: streamSimple as unknown as StageStreamFn,
+		});
+		await engine.performTurn("查看旧桥。");
+		const proposal = await engine.proposeStateRepair("test-chat", "地点改为新桥", [{ role: "user", text: "地点改为新桥" }]);
+		assert.equal(proposal.kind, "proposal");
+		if (proposal.kind !== "proposal" || !("token" in proposal)) throw new Error("missing proposal");
+		blockAuth = true;
+		const refresh = engine.refreshState();
+		assert.deepEqual(engine.stateRepairProposalStatus(), { kind: "busy" });
+		assert.deepEqual(engine.applyStateRepair("test-chat", proposal.token), { ok: false, reason: "当前有生成或记账任务。" });
+		authGate.resolve();
+		await refresh;
+	} finally {
+		authGate.resolve();
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -220,11 +254,12 @@ test("状态修复：提案确认后写入当前分支，并只允许一次无�
 		assert.ok(repairDeltas.some(([kind, delta]) => kind === "thinking" && delta.includes("先核对证据")));
 		assert.ok(repairDeltas.some(([kind, delta]) => kind === "text" && delta.includes('"patch"')));
 		if (proposal.kind !== "proposal" || !("token" in proposal)) return;
-    assert.equal(engine.applyStateRepair("another-chat", proposal.token).ok, false, "proposal token cannot be applied from another modification chat");
+    assert.deepEqual(engine.stateRepairProposalStatus(), { kind: "current", chatId: "test-chat", sessionId: sm.getSessionId(), token: proposal.token });
+    assert.equal(engine.applyStateRepair("another-chat", proposal.token).expired, true, "proposal token cannot be applied from another modification chat");
 		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.before, ["怀表"]);
 		assert.deepEqual(proposal.changes.find((change) => change.path === "inventory")?.after, []);
 		sm.appendCustomEntry("rp-state", { time: "", location: "", characters: {}, inventory: ["怀表"], flags: {}, plot_threads: [] });
-    assert.equal(engine.applyStateRepair("test-chat", proposal.token).ok, false, "even a same-value new state snapshot invalidates the proposal leaf");
+    assert.equal(engine.applyStateRepair("test-chat", proposal.token).expired, true, "even a same-value new state snapshot invalidates the proposal leaf");
 		reg.setResponses([fauxAssistantMessage(JSON.stringify({ patch: { inventory: [] }, evidence: [{ source: "story", quote: "我把怀表还给沈舟" }] }))] as never);
     const fresh = await engine.proposeStateRepair("test-chat", "怀表已经还给沈舟，请从账本移除。", [{ role: "user", text: "怀表已经还给沈舟，请从账本移除。" }]);
 		assert.equal(fresh.kind, "proposal");
@@ -309,7 +344,8 @@ test("状态修复：旧会话仅有磁盘账本时保留未修正字段，且�
 		if (stale.kind !== "proposal" || !("token" in stale)) throw new Error("missing proposal");
 		cached.inventory.push("纸伞");
 		saveState(file, cached);
-    assert.equal(engine.applyStateRepair("test-chat", stale.token).ok, false);
+    assert.deepEqual(engine.stateRepairProposalStatus(), { kind: "none" }, "cached ledger changes must invalidate the active proposal even before apply");
+    assert.equal(engine.applyStateRepair("test-chat", stale.token).expired, true);
     const fresh = await engine.proposeStateRepair("test-chat", "位置应为新桥", [{ role: "user", text: "位置应为新桥" }]);
 		assert.equal(fresh.kind, "proposal");
 		if (fresh.kind !== "proposal" || !("token" in fresh)) throw new Error("missing proposal");

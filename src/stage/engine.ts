@@ -947,6 +947,28 @@ export class StageEngine {
 		});
 	}
 
+  invalidateStateRepair(): void {
+    this.#stateRepair = null;
+  }
+
+  stateRepairProposalStatus(): { kind: "busy" | "none" } | { kind: "current"; chatId: string; sessionId: string; token: string } {
+    if (this.#busy || this.#refreshing) return { kind: "busy" };
+    const proposal = this.#stateRepair;
+    if (!proposal) return { kind: "none" };
+    const sm = this.#deps.getSession().sessionManager;
+    if (sm.getSessionId() !== proposal.sessionId || sm.getLeafId() !== proposal.leafId) {
+      this.#stateRepair = null;
+      return { kind: "none" };
+    }
+    const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];
+    const state = this.#repairBaseline(branch, sm.getSessionId(), sm.getEntries() as BranchEntryLike[]);
+    if (JSON.stringify(state) !== proposal.stateJson) {
+      this.#stateRepair = null;
+      return { kind: "none" };
+    }
+    return { kind: "current", chatId: proposal.chatId, sessionId: proposal.sessionId, token: proposal.token };
+  }
+
   async proposeStateRepair(chatId: string, instruction: string, history: Array<{ role: "user" | "assistant"; text: string }>, onDelta?: (kind: "thinking" | "text", delta: string) => void): Promise<StateRepairParseResult> {
 		if (this.#busy || this.#refreshing) return { kind: "invalid", reason: "当前有生成或记账任务。" };
 		const text = instruction.trim();
@@ -1003,16 +1025,16 @@ export class StageEngine {
 		}
 	}
 
-  applyStateRepair(chatId: string, token: string): { ok: boolean; reason?: string; state?: WorldState; warning?: boolean; changes?: StateRepairChange[]; undoToken?: string } {
+  applyStateRepair(chatId: string, token: string): { ok: boolean; expired?: true; reason?: string; state?: WorldState; warning?: boolean; changes?: StateRepairChange[]; undoToken?: string } {
 		const proposal = this.#stateRepair;
-    if (!proposal || proposal.token !== token || proposal.chatId !== chatId) return { ok: false, reason: "修复提案已失效，请重新分析。" };
+    if (!proposal || proposal.token !== token || proposal.chatId !== chatId) return { ok: false, expired: true, reason: "修复提案已失效，请重新分析。" };
 		if (this.#busy || this.#refreshing) return { ok: false, reason: "当前有生成或记账任务。" };
 		const sm = this.#deps.getSession().sessionManager;
 		const branch = storyBranch(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]) as BranchEntryLike[]) as BranchEntryLike[];
 		const state = this.#repairBaseline(branch, sm.getSessionId(), sm.getEntries() as BranchEntryLike[]);
 		if (sm.getSessionId() !== proposal.sessionId || sm.getLeafId() !== proposal.leafId || JSON.stringify(state) !== proposal.stateJson) {
 			this.#stateRepair = null;
-			return { ok: false, reason: "提案期间分支或账本已变化，请重新分析。" };
+			return { ok: false, expired: true, reason: "提案期间分支或账本已变化，请重新分析。" };
 		}
 		const before = structuredClone(state);
 		const next = structuredClone(proposal.nextState);

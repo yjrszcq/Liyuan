@@ -6,8 +6,8 @@ import { test } from "node:test";
 
 import { SessionManager } from "@liyuan/agent-runtime";
 import { defaultState } from "../src/state.ts";
-import { createRepairChat, deleteRepairChat, deleteRepairChatsForSessionPath, listRepairChats, markRepairProposalApplied, saveRepairChats } from "../src/state-repair-chats.ts";
-import { buildStateRepairPrompt, parseStateRepairResult } from "../src/state-repair.ts";
+import { createRepairChatHistory, createRepairChat, deleteRepairChat, deleteRepairChatsForSessionPath, listRepairChats, markRepairProposalApplied, saveRepairChats } from "../src/state-repair-chats.ts";
+import { buildStateRepairPrompt, parseStateRepairResult, type StateRepairParseResult } from "../src/state-repair.ts";
 
 test("repair chats persist per parent session, delete independently, and cascade using generated session files", () => {
   const cwd = mkdtempSync(join(tmpdir(), "liyuan-repair-chats-"));
@@ -70,6 +70,100 @@ test("applied status is persisted only on the matching proposal and leaves older
     assert.equal(saved[0]?.messages[1]?.proposal?.applied, true);
     assert.equal(saved[0]?.messages[1]?.thinking, "actual model reasoning");
     assert.equal(saved[1]?.messages[0]?.proposal?.applied, undefined);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("repair chat reads remove only legacy assistant boilerplate", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "liyuan-repair-boilerplate-"));
+  const sessionId = "parent";
+  const proposalText = "已生成状态修改提案，请核对差异与证据后确认应用。";
+  const answerPrefix = "只读答复，未生成修改提案。";
+  try {
+    const chat = createRepairChat(cwd, sessionId, "Repair");
+    chat.messages = [
+      { role: "user", text: `${answerPrefix}\n\n请解释这句话` },
+      { role: "assistant", text: `${answerPrefix}\n\n实际回答\n仍保留换行` },
+      { role: "assistant", text: proposalText, proposal: { token: "legacy", changes: [], evidence: [] } },
+      { role: "assistant", text: `模型引用：${proposalText}` },
+      { role: "assistant", text: "Read-only answer; no modification proposal was generated.\n\nEnglish answer" },
+      { role: "assistant", text: "A state-modification proposal is ready. Review the changes and evidence before applying." },
+    ];
+    saveRepairChats(cwd, sessionId, [chat]);
+    const saved = listRepairChats(cwd, sessionId, "Repair")[0]!;
+    assert.deepEqual(saved.messages.map(({ text }) => text), [
+      `${answerPrefix}\n\n请解释这句话`, "实际回答\n仍保留换行", "", `模型引用：${proposalText}`, "English answer", "",
+    ]);
+    assert.equal(saved.messages[2]?.proposal?.token, "legacy");
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("repair rewind truncates from a user message, expires proposals, and failed regeneration preserves history", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "liyuan-repair-history-"));
+  const sessionId = "parent-session";
+  const chat = createRepairChat(cwd, sessionId, "Repair");
+  chat.messages = [
+    { role: "user", text: "old request" },
+    { role: "assistant", text: "old proposal", proposal: { token: "old", changes: [], evidence: [] } },
+    { role: "user", text: "later request" },
+    { role: "assistant", text: "later answer" },
+  ];
+  saveRepairChats(cwd, sessionId, [chat]);
+  let activeSession = sessionId;
+  let invalidations = 0;
+  let receivedHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
+  let answer: Promise<StateRepairParseResult & { token?: string }> = Promise.resolve({ kind: "invalid", reason: "model failed" });
+  const history = createRepairChatHistory({
+    cwd,
+    getSessionId: () => activeSession,
+    isStreaming: () => false,
+    newChatTitle: () => "Repair",
+    invalidateProposal: () => { invalidations++; },
+    propose: async (_id, _text, messages) => { receivedHistory = messages; return await answer; },
+  });
+  try {
+    assert.throws(() => history.rewindRepairChat(chat.id, 1, sessionId), /有效的用户消息/);
+    const rewound = history.rewindRepairChat(chat.id, 2, sessionId).chat;
+    assert.deepEqual(rewound.messages.map(({ text }) => text), ["old request", "old proposal"]);
+    assert.equal(rewound.messages[1]?.proposal?.expired, true);
+    assert.equal(history.canApplyProposal(chat.id, "old", sessionId), false);
+    assert.equal(invalidations, 1);
+
+    const beforeFailure = JSON.stringify(rewound.messages);
+    const result = await history.repairTurn(chat.id, "replacement", sessionId, undefined, 0);
+    assert.deepEqual(result, { kind: "invalid", reason: "model failed" });
+    assert.deepEqual(receivedHistory, [{ role: "user", text: "replacement" }]);
+    assert.equal(JSON.stringify(listRepairChats(cwd, sessionId, "Repair")[0]?.messages), beforeFailure);
+
+    const pendingAnswer = Promise.withResolvers<{ kind: "invalid"; reason: string }>();
+    answer = pendingAnswer.promise;
+    const pending = history.repairTurn(chat.id, "retry", sessionId, undefined, 0);
+    assert.throws(() => history.rewindRepairChat(chat.id, 0, sessionId), /当前有生成或记账任务/);
+    pendingAnswer.resolve({ kind: "invalid", reason: "model failed" });
+    await pending;
+    activeSession = "switched-session";
+    assert.throws(() => history.rewindRepairChat(chat.id, 0, sessionId), /会话已切换/);
+    activeSession = sessionId;
+    answer = Promise.resolve({ kind: "proposal", repair: { patch: {}, evidence: [] }, state: defaultState(), changes: [], token: "fresh" });
+    const regenerated = await history.repairTurn(chat.id, "corrected first request", sessionId, undefined, 0);
+    assert.ok("chat" in regenerated);
+    assert.deepEqual(regenerated.chat.messages.map(({ role, text }) => ({ role, text })), [
+      { role: "user", text: "corrected first request" },
+      { role: "assistant", text: "" },
+    ]);
+    assert.equal(regenerated.chat.messages[1]?.proposal?.token, "fresh");
+    assert.equal(history.canApplyProposal(chat.id, "fresh", sessionId), true);
+    assert.equal(history.reconcileProposalExpiry(sessionId, { kind: "busy" })[0]?.messages[1]?.proposal?.expired, undefined);
+    assert.equal(history.reconcileProposalExpiry(sessionId, { kind: "current", sessionId, chatId: chat.id, token: "fresh" })[0]?.messages[1]?.proposal?.expired, undefined);
+    assert.equal(history.reconcileProposalExpiry(sessionId, { kind: "none" })[0]?.messages[1]?.proposal?.expired, true);
+    assert.equal(history.canApplyProposal(chat.id, "fresh", sessionId), false);
+    answer = Promise.resolve({ kind: "answer", text: "仅保留模型实际回答" });
+    const answered = await history.repairTurn(chat.id, "查看账本", sessionId, undefined, 0);
+    assert.ok("chat" in answered);
+    assert.equal(answered.chat.messages[1]?.text, "仅保留模型实际回答");
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
