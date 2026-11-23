@@ -3,10 +3,27 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { resolveConfigPath } from "./paths.ts";
 import { rulesAgentDir } from "./user-rules.ts";
-import { formatRepairPromptMigration } from "./prompt-entries.ts";
+import { formatRepairPromptMigration, parsePromptEntries, toggleEntry, uniqueEntryName } from "./prompt-entries.ts";
 
 export const REPAIR_RULES_FILE = "REPAIR_APPEND_SYSTEM.md";
 const shippedRepairRules = (): string => readFileSync(new URL("../assets/REPAIR_APPEND_SYSTEM.md", import.meta.url), "utf8");
+const PATH_GUIDANCE_MARKER = "repair path guidance migration v1";
+const PATH_GUIDANCE_TITLE = "MVU 与数据面板的修正路径";
+
+/** Append the new editable entry once without replacing user-authored rules. */
+function migratePathGuidance(path: string, content: string): string {
+	if (content.includes(PATH_GUIDANCE_MARKER)) return content;
+	const entries = parsePromptEntries(content);
+	const name = uniqueEntryName(PATH_GUIDANCE_TITLE, "", new Set(entries.map((entry) => entry.name)));
+	const template = shippedRepairRules();
+	const heading = template.indexOf(`## ${PATH_GUIDANCE_TITLE}\n`);
+	if (heading < 0) return content;
+	let addition = template.slice(heading).replace(`## ${PATH_GUIDANCE_TITLE}`, `## ${name}`);
+	if (!entries.some((entry) => entry.enabled)) addition = toggleEntry(addition, name, false) ?? addition;
+	const updated = `<!--\n${PATH_GUIDANCE_MARKER}\n-->\n\n${content}${content.endsWith("\n") || !content ? "" : "\n"}\n${addition}`;
+	writeFileSync(path, updated, "utf8");
+	return updated;
+}
 
 export function repairRulesPath(agentDir = rulesAgentDir()): string {
 	return join(agentDir, REPAIR_RULES_FILE);
@@ -39,6 +56,7 @@ export function migrateLegacyRepairPrompt(agentDir = rulesAgentDir(), configFile
 		const content = readFileSync(path, "utf8");
 		const cleaned = content.replace(/^# 状态修改工作方式[ \t]*\r?\n(?:[ \t]*\r?\n)*(?=#{1,6}[ \t])/, "");
 		if (cleaned !== content) writeFileSync(path, cleaned, "utf8");
+		migratePathGuidance(path, cleaned);
 	} catch {
 		// A missing file is seeded below; unreadable files are left untouched.
 	}

@@ -9,7 +9,7 @@ import { applyConfigPatch, handleApiRequest, type RestHost } from "../server/res
 import { DEFAULT_CONFIG } from "../src/types.ts";
 import { buildStateRepairPrompt } from "../src/state-repair.ts";
 import { defaultState } from "../src/state.ts";
-import { parsePromptEntries, renderForModel, toggleEntry } from "../src/prompt-entries.ts";
+import { deleteEntry, parsePromptEntries, renderForModel, setEntryContent, toggleEntry } from "../src/prompt-entries.ts";
 import { REPAIR_RULES_FILE, migrateLegacyRepairPrompt, repairRulesContent, repairRulesPath } from "../src/repair-rules.ts";
 
 test("old empty leading heading is removed without touching user content", () => {
@@ -20,11 +20,11 @@ test("old empty leading heading is removed without touching user content", () =>
 		const remaining = "## 第一条\n保留规则。\n";
 		writeFileSync(file, `# 状态修改工作方式\n\n${remaining}`);
 		migrateLegacyRepairPrompt(root, configFile);
-		assert.equal(readFileSync(file, "utf8"), remaining);
+		assert.ok(readFileSync(file, "utf8").includes(remaining));
 		const customized = `# 状态修改工作方式\n用户填写的正文。\n\n${remaining}`;
 		writeFileSync(file, customized);
 		migrateLegacyRepairPrompt(root, configFile);
-		assert.equal(readFileSync(file, "utf8"), customized);
+		assert.ok(readFileSync(file, "utf8").includes(customized));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -44,7 +44,7 @@ test("legacy repairPrompt migrates losslessly beside an existing rules file exac
 	try {
 		migrateLegacyRepairPrompt(agentDir, configFile);
 		const migrated = readFileSync(repairRulesPath(agentDir), "utf8");
-		assert.ok(migrated.startsWith(existing), "the existing file is preserved byte-for-byte before appended migration content");
+		assert.ok(migrated.includes(existing), "the existing file is preserved byte-for-byte beside appended migration content");
 		const rendered = renderForModel(migrated);
 		assert.ok(rendered.includes(legacy.trim()), "the complete legacy Markdown, including headings and HTML comments, reaches the model");
 		assert.doesNotMatch(rendered, /legacy repairPrompt migration/);
@@ -66,7 +66,7 @@ test("legacy repairPrompt migrates losslessly beside an existing rules file exac
 	}
 });
 
-test("empty legacy config does not replace an empty rules file; absent file seeds shipped rules", () => {
+test("empty legacy rules remain disabled for the model; absent file seeds shipped rules", () => {
 	const root = mkdtempSync(join(tmpdir(), "liyuan-repair-rules-empty-"));
 	const agentDir = join(root, "agent");
 	const configFile = join(root, "liyuan.config.json");
@@ -75,13 +75,49 @@ test("empty legacy config does not replace an empty rules file; absent file seed
 	writeFileSync(repairRulesPath(agentDir), "");
 	try {
 		migrateLegacyRepairPrompt(agentDir, configFile);
-		assert.equal(repairRulesContent(agentDir), "", "existing empty files have no shipped-content fallback");
+		assert.equal(renderForModel(repairRulesContent(agentDir)), "", "an empty file stays empty when rendered for the model");
 		assert.equal(JSON.parse(readFileSync(configFile, "utf8")).repairPrompt, undefined);
 		rmSync(repairRulesPath(agentDir));
 		migrateLegacyRepairPrompt(agentDir, configFile);
 		assert.ok(repairRulesContent(agentDir).includes("先核对再提出最小修正"));
 		assert.ok(existsSync(repairRulesPath(agentDir)));
 		assert.equal(REPAIR_RULES_FILE, "REPAIR_APPEND_SYSTEM.md");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("path guidance migrates once, respects switches, and reaches the repair prompt only when enabled", () => {
+	const root = mkdtempSync(join(tmpdir(), "liyuan-repair-path-guide-"));
+	const file = repairRulesPath(root);
+	const existing = "## 自定义规则\n保留用户内容。\n\n<!--\n## 已关闭\n不应送模。\n-->\n";
+	const title = "MVU 与数据面板的修正路径";
+	try {
+		writeFileSync(file, existing);
+		migrateLegacyRepairPrompt(root, join(root, "absent.json"));
+		const migrated = readFileSync(file, "utf8");
+		assert.ok(migrated.includes(existing));
+		assert.equal(parsePromptEntries(migrated).find((entry) => entry.name === "已关闭")?.enabled, false);
+		assert.equal(parsePromptEntries(migrated).find((entry) => entry.name === title)?.enabled, true);
+		const makePrompt = (rules: string) => buildStateRepairPrompt({
+			state: defaultState(), instruction: "校正账本", story: "", charName: "角色", userName: "用户",
+			additionalPrompt: renderForModel(rules),
+		}).systemPrompt;
+		assert.match(makePrompt(migrated), /A\.B/);
+		const disabled = toggleEntry(migrated, title, false);
+		assert.ok(disabled);
+		assert.doesNotMatch(makePrompt(disabled), /A\.B/);
+		assert.match(makePrompt(disabled), /禁止 roster/);
+		writeFileSync(file, disabled);
+		migrateLegacyRepairPrompt(root, join(root, "absent.json"));
+		assert.equal(readFileSync(file, "utf8"), disabled);
+		const edited = setEntryContent(disabled, "自定义规则", "用户编辑后的内容。");
+		assert.ok(edited);
+		const deleted = deleteEntry(edited, title);
+		assert.ok(deleted);
+		writeFileSync(file, deleted);
+		migrateLegacyRepairPrompt(root, join(root, "absent.json"));
+		assert.equal(readFileSync(file, "utf8"), deleted, "deleting the entry does not reinstall it on restart");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
