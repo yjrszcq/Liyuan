@@ -12236,6 +12236,8 @@ html[data-has-wallpaper="true"] .composer-box {
 .repair-assistant { align-self: flex-start; }
 .repair-assistant > .info-line { max-width: none; overflow-wrap: anywhere; }
 .repair-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.repair-message-text > :first-child { margin-top: 0; }
+.repair-message-text > :last-child { margin-bottom: 0; }
 .repair-message-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .repair-action { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid var(--hairline); border-radius: 6px; background: transparent; color: var(--text-soft); font: inherit; font-size: 11px; cursor: pointer; }
 .repair-action:hover:not(:disabled) { color: var(--text-strong); border-color: var(--hairline-strong); }
